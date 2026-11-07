@@ -38,7 +38,7 @@
 
 1. **glib 的 iOS cross build**：meson 在 cross 模式下执行 `cc.run()` 特性探测会失败，且需要 build-machine 侧的 `glib-mkenums` / `glib-compile-resources`。已按 UTM 的 `generate_meson_cross()` 修好 cross file：`host_machine.system = 'ios'`、显式提供 host 工具、`needs_exe_wrapper = true`、预置 `has_function_pipe2/dup3 = false`，并在 CI 装 `glib-utils`。仍需一轮 CI 验证 glib 2.80 是否还触发 `cc.run()` 检查。
 1b. **openssl 对 iOS 非必需**：`ipod_touch_pke.c` 的 `<openssl/bn.h>` 被 `#ifndef QEMU_IOS_PORTABLE_CRYPTO` 包住，`hw/arm/meson.build` 的 `dependency('libcrypto')` 只在 `host_os == 'windows'` 分支；configure 已加 `-DQEMU_IOS_PORTABLE_CRYPTO` 走 QEMU 内置 crypto。故默认依赖集不再包含 openssl，需要时可手动加回。
-1c. **CI 实测已解决的三个坑**：libffi 3.4.6 的裸 `.cfi_*` 汇编 → 升 3.5.0；glib 2.80 缺 iOS 处理 → 升 UTM 验证过的 2.83.0；`target/meson.build` 无条件 `subdir('hexagon')` 的 `gen_semantics(native:true)` 在 cross 模式下缺 build-machine 编译器 → 只编 arm-softmmu 时注释掉该行（补丁只作用于 CI 临时源码树）。`--enable-ucontext` 也不是本 fork 的有效选项，iOS 只提供 `sigaltstack` coroutine backend。
+1c. **CI 实测已解决的坑**：libffi 3.4.6 的裸 `.cfi_*` 汇编 → 升 3.5.0；glib 2.80 缺 iOS 处理 → 升 UTM 验证过的 2.83.0；cross 模式下 `target/meson.build` 无条件 subdir 的 hexagon/s390x `native:true` 生成器报 "No build machine compiler" → 只编 arm-softmmu 时裁剪为仅 `subdir('arm')`（补丁只作用于 CI 临时源码树）；`--enable-ucontext` 不是本 fork 的有效选项，iOS 只提供 `sigaltstack` coroutine backend；proxy-libintl 0.4 没有 `tests` meson 选项。依赖 sysroot 已实测 **5/5 全编成**（11 个静态库）。
 2. **`qemu-macos-extras.c` 的平台假设**：`make-shared.py` 会把 macOS 控件/音频实现改写后用于 Linux/Android，但里面引用了 `ui/cocoa.m` 相关符号。iOS host 需要等价的 UIKit 改写，当前 `build-engine-lib.sh` 只编译 `qemu-ios-entry.c` + `qemu-ios-ui.c`，未包含 extras。
 3. **helper 单进程化**：App 壳层依赖 usbmuxd daemon、FirmwareKit、GuestAgent 等独立进程；iOS 禁止 `fork/exec`，必须改成进程内线程 + 静态库调用。
 4. **音频与多点触控**：上游研究注明音频输出有未修 bug、麦克风完全没写，多点触控尚未实现。

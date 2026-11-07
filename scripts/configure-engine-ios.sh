@@ -66,18 +66,29 @@ LDFLAGS_IOS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -L$PREFI
 
 echo
 echo "== iOS cross 适配补丁 =="
-# QEMU 的 target/meson.build 无条件 subdir() 所有架构，其中 target/hexagon 的
-# gen_semantics 是 native:true 的 build-machine 可执行程序。在 --cross-prefix=
-# 触发的 cross 模式下，meson 会报 "No build machine compiler" 而中止 setup。
-# 我们只构建 --target-list=arm-softmmu，hexagon 子目录完全用不到，注释掉即可。
-# 该补丁只作用于 CI 里解压出来的临时源码树，不改动仓库也不改动上游 release。
+# QEMU 的 target/meson.build 无条件 subdir() 全部 19 个架构，其中 hexagon 的
+# gen_semantics、s390x 的 gen-features 等都是 native:true 的 build-machine
+# 可执行程序。在 --cross-prefix= 触发的 cross 模式下，meson 会依次报
+# "No build machine compiler" 而中止 setup（CI 实测先后卡在 hexagon、s390x）。
+# 只构建 --target-list=arm-softmmu 时，非 arm 的 target 子目录完全用不到：
+# 顶层 meson.build 只通过 hw_arch map 引用各架构，不直接依赖这些 *_ss 变量。
+# 因此一次性裁剪为只保留 subdir('arm')。补丁只作用于 CI 解压出的临时源码树，
+# 不改动仓库，也不改动上游 release tarball。
 TM="$SRC/target/meson.build"
-if grep -q "^subdir('hexagon')" "$TM"; then
-  sed -i '' "s|^subdir('hexagon')|# subdir('hexagon')  # iOS arm-softmmu cross: hexagon gen_semantics needs a build-machine compiler|" "$TM"
-  echo "  已禁用 target/hexagon（arm-softmmu 不需要）"
-else
-  echo "  target/hexagon 已禁用或源码结构变化，跳过"
-fi
+python3 - "$TM" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+out, disabled = [], []
+for line in p.read_text().splitlines():
+    m = re.match(r"^subdir\('([^']+)'\)", line)
+    if m and m.group(1) != 'arm':
+        disabled.append(m.group(1))
+        out.append("# " + line + "  # iOS arm-softmmu cross: only arm target is built")
+    else:
+        out.append(line)
+p.write_text("\n".join(out) + "\n")
+print(f"  保留 subdir('arm')，禁用 {len(disabled)} 个非 arm target: {','.join(disabled)}")
+PY
 
 echo
 echo "== configure =="
