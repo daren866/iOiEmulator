@@ -148,6 +148,25 @@ echo "  cross file: $WORK/sysroot/ios-cross.ini"
 echo "  host tools: glib-mkenums=${HOST_GLIB_MKENUMS:-缺失} glib-compile-resources=${HOST_GLIB_RESOURCES:-缺失}"
 
 # ---- 工具函数 ---------------------------------------------------------------
+# libgpg-error / libgcrypt 会用 CC_FOR_BUILD 编译并运行 build-machine 工具
+# （mkheader / mkerrcodes / gost-s-box）。workflow 级 env 里的
+# IPHONEOS_DEPLOYMENT_TARGET=15.0 会被 Apple clang driver 自动读取，把这些
+# host 工具也标成 iOS 平台，在 macOS 上运行时直接 Killed: 9（CI 日志里的
+# "ld: warning: building for 'iOS'" 就是它）。目标代码由 ios-clang wrapper
+# 显式携带 -miphoneos-version-min，MIN_IOS 在脚本开头已固化，unset 不影响。
+clean_host_env() {
+  unset IPHONEOS_DEPLOYMENT_TARGET SDKROOT \
+        TVOS_DEPLOYMENT_TARGET WATCHOS_DEPLOYMENT_TARGET MACOSX_DEPLOYMENT_TARGET
+  export LDFLAGS="" LDFLAGS_FOR_BUILD=""
+  export CFLAGS="-fPIC -O2" CFLAGS_FOR_BUILD="-O2"
+  export CPPFLAGS="" CPPFLAGS_FOR_BUILD=""
+  export CXXFLAGS="-fPIC -O2"
+  export CC_FOR_BUILD=/usr/bin/cc
+  # libgcrypt 的 configure 会在 PATH 找 gpgrt-config / gpg-error-config；
+  # runner 上 Homebrew 装了 libgpg-error，必须让本 sysroot 的优先。
+  export PATH="$PREFIX/bin:$PATH"
+}
+
 sha_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   else shasum -a 256 "$1" | awk '{print $1}'; fi
@@ -234,15 +253,7 @@ build_one() {
             ;;
           *)      EXTRA="" ;;
         esac
-        if [ -n "$host_build_fix" ]; then
-          export LDFLAGS="" LDFLAGS_FOR_BUILD=""
-          export CFLAGS_FOR_BUILD="-O2" CPPFLAGS_FOR_BUILD=""
-          export CC_FOR_BUILD=/usr/bin/cc
-          # libgcrypt 的 configure 会在 PATH 里找 gpgrt-config / gpg-error-config；
-          # runner 上 Homebrew 装了 libgpg-error，必须让本 sysroot 的优先，
-          # 否则会混入 macOS 的头文件与 dylib。
-          export PATH="$PREFIX/bin:$PATH"
-        fi
+        [ -z "$host_build_fix" ] || clean_host_env
         ./configure --host="$HOST_TRIPLE" --prefix="$PREFIX" \
           --disable-shared --enable-static $EXTRA
         ;;
@@ -279,6 +290,7 @@ build_one() {
   stage="build"
   (
     cd "$SRC/$dir"
+    [ -z "$host_build_fix" ] || clean_host_env
     case "$kind" in
       openssl) make -j"$JOBS" build_libs ;;
       meson)   ninja -C build -j"$JOBS" ;;
@@ -289,6 +301,7 @@ build_one() {
   stage="install"
   (
     cd "$SRC/$dir"
+    [ -z "$host_build_fix" ] || clean_host_env
     case "$kind" in
       openssl) make install_dev ;;
       meson)   ninja -C build install ;;
