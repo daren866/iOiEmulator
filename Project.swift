@@ -19,7 +19,7 @@ let deploymentTargets: DeploymentTargets = .iOS("15.0")
 
 // 写成单个字符串字面量：多段 `+` 拼接会让 Tuist 的 manifest 编译器
 // 报 "unable to type-check this expression in reasonable time"。
-let engineLDFlags: String = "$(inherited) -lqemu-arm -lz -liconv -framework CoreFoundation -framework CoreGraphics -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework OpenGLES -framework IOSurface -framework ImageIO -framework Security -framework AudioToolbox -framework Foundation"
+let engineLDFlags: SettingValue = "$(inherited) -lqemu-arm -lz -liconv -framework CoreFoundation -framework CoreGraphics -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework OpenGLES -framework IOSurface -framework ImageIO -framework Security -framework AudioToolbox -framework Foundation"
 
 var appSettings: [String: SettingValue] = [
     "IPHONEOS_DEPLOYMENT_TARGET": "15.0",

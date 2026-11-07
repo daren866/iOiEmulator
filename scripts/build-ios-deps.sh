@@ -153,8 +153,9 @@ record() {
   local name="$1" ok="$2" stage="$3" log="$4" secs="$5"
   printf '{"name":"%s","ok":%s,"stage":"%s","log":"%s","seconds":%s}\n' \
     "$name" "$ok" "$stage" "$log" "$secs" > "$STATUS/$name.json"
-  if [ "$ok" = "true" ]; then echo "  [OK]   $name ($secs s)"
-  else echo "  [FAIL] $name — $stage，日志：$log"; fi
+  # 变量名必须用 ${}，否则紧随其后的中文全角标点会被 bash 吞进变量名
+  if [ "$ok" = "true" ]; then echo "  [OK]   ${name} (${secs} s)"
+  else echo "  [FAIL] ${name} — ${stage}，日志：${log}"; fi
 }
 
 build_one() {
