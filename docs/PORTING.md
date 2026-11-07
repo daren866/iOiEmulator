@@ -28,15 +28,16 @@
 | iOS 嵌入层核验与清单 | ✅ 完成 | `scripts/engine-source-manifest.sh` |
 | 多个 macOS workflow 串联 | ✅ 完成 | `.github/workflows/*.yml`（5 个，全部 `macos-15`） |
 | 未签名 arm64 IPA 自动打包 → Releases | ✅ 已用真实 CI 跑通 | `build-unsigned-ipa.yml` |
-| iOS arm64 静态依赖交叉编译 | 🟡 脚本就绪，CI 逐包验证中 | `scripts/build-ios-deps.sh` |
-| QEMU `configure` / `ninja` / `libqemu-arm.a` 归档 | 🟡 脚本就绪，CI 默认 `configure_only` | `scripts/configure-engine-ios.sh`、`build-engine-lib.sh` |
+| iOS arm64 静态依赖交叉编译 | 🟡 **CI 实测 3/6 成功**（libffi 3.5.0 / pcre2 / pixman）；glib、proxy-libintl、openssl 待修 | `scripts/build-ios-deps.sh` |
+| QEMU `configure` / `ninja` / `libqemu-arm.a` 归档 | 🟡 CI 已真实跑到 meson setup；首个硬错误 `-Dcoroutine_backend=ucontext`（iOS 只提供 sigaltstack）已修 | `scripts/configure-engine-ios.sh`、`build-engine-lib.sh` |
 | Swift ↔ `qemu_ios_*` 桥接 + 真实帧显示 | ✅ 代码完成，**未经真机验证** | `EngineLinked/` |
 | helper 单进程化、音频、多点触控 | ❌ 未做 | 见下文 |
 | 真机启动 iOS guest | ❌ 未验证 | 需 macOS + 真机 + 自备固件 |
 
 ## 尚未解决的问题（真实卡点）
 
-1. **glib 的 iOS cross build**：meson 在 cross 模式下执行 `cc.run()` 特性探测会失败。UTM 靠 `patches/glib-*.patch` 把检查改成预定义值；本仓库当前用 `-Dtests=false` 等选项尽量关闭，是否够用需看 CI 的 `status/glib.log`。这是最可能失败的一环。
+1. **glib 的 iOS cross build**：meson 在 cross 模式下执行 `cc.run()` 特性探测会失败，且需要 build-machine 侧的 `glib-mkenums` / `glib-compile-resources`。已按 UTM 的 `generate_meson_cross()` 修好 cross file：`host_machine.system = 'ios'`、显式提供 host 工具、`needs_exe_wrapper = true`、预置 `has_function_pipe2/dup3 = false`，并在 CI 装 `glib-utils`。仍需一轮 CI 验证 glib 2.80 是否还触发 `cc.run()` 检查。
+1b. **openssl 对 iOS 非必需**：`ipod_touch_pke.c` 的 `<openssl/bn.h>` 被 `#ifndef QEMU_IOS_PORTABLE_CRYPTO` 包住，`hw/arm/meson.build` 的 `dependency('libcrypto')` 只在 `host_os == 'windows'` 分支；configure 已加 `-DQEMU_IOS_PORTABLE_CRYPTO` 走 QEMU 内置 crypto。故默认依赖集不再包含 openssl，需要时可手动加回。
 2. **`qemu-macos-extras.c` 的平台假设**：`make-shared.py` 会把 macOS 控件/音频实现改写后用于 Linux/Android，但里面引用了 `ui/cocoa.m` 相关符号。iOS host 需要等价的 UIKit 改写，当前 `build-engine-lib.sh` 只编译 `qemu-ios-entry.c` + `qemu-ios-ui.c`，未包含 extras。
 3. **helper 单进程化**：App 壳层依赖 usbmuxd daemon、FirmwareKit、GuestAgent 等独立进程；iOS 禁止 `fork/exec`，必须改成进程内线程 + 静态库调用。
 4. **音频与多点触控**：上游研究注明音频输出有未修 bug、麦克风完全没写，多点触控尚未实现。

@@ -81,7 +81,7 @@ set +e
   --with-devices-arm=portable \
   --enable-tcg \
   -Dtcg_interpreter=true \
-  -Dcoroutine_backend=ucontext \
+  -Dcoroutine_backend=sigaltstack \
   --disable-pixman \
   --disable-gcrypt \
   --disable-slirp \

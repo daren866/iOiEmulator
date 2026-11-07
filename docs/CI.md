@@ -37,7 +37,7 @@
 | --- | --- | --- |
 | `configure_only` | `true` | 只跑 `configure`，几分钟给可诊断结果；关掉才执行完整 `ninja` + 静态库归档 |
 | `build_ipa` | `true` | 引擎阶段结束后重新打包 IPA |
-| `packages` | `libffi,pcre2,glib,pixman,openssl,proxy-libintl` | 依赖集合 |
+| `packages` | `libffi,pcre2,glib,pixman,proxy-libintl` | 依赖集合（openssl 对 iOS 非必需，见下） |
 
 每个阶段都会产出报告：
 

@@ -21,7 +21,7 @@ SRC="$WORK/deps-src"
 STATUS="$WORK/sysroot/status"
 BIN="$WORK/bin"
 JOBS="${LT_JOBS:-3}"
-PACKAGES="${PACKAGES:-libffi,pcre2,glib,pixman,openssl,proxy-libintl}"
+PACKAGES="${PACKAGES:-libffi,pcre2,glib,pixman,proxy-libintl}"
 MIN_IOS="${IPHONEOS_DEPLOYMENT_TARGET:-15.0}"
 
 mkdir -p "$PREFIX" "$SRC" "$STATUS" "$BIN" "$PREFIX/lib/pkgconfig"
@@ -95,7 +95,16 @@ export CXXFLAGS="-fPIC -O2"
 export LDFLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS"
 export PATH="$BIN:$PATH"
 
-# ---- Meson iOS cross file（依赖与 QEMU 共用）--------------------------------
+# ---- Meson iOS cross file ---------------------------------------------------
+# 关键做法来自 UTM scripts/build_dependencies.sh 的 generate_meson_cross()：
+#   * host_machine.system 必须是 'ios' 而不是 'darwin'，否则 meson 走 macOS 分支
+#   * 显式提供 build-machine 工具（glib-mkenums / glib-compile-resources / python），
+#     否则 meson 会尝试运行 iOS 版工具，在 cross 模式下直接失败
+#   * 预置 has_function_pipe2/dup3 = false：新版 SDK 里 meson 的 has_function()
+#     自声明原型，绕过可用性标注，会误判为存在，留下旧系统上的弱导入 NULL
+HOST_GLIB_MKENUMS="$(command -v glib-mkenums || true)"
+HOST_GLIB_RESOURCES="$(command -v glib-compile-resources || true)"
+HOST_PYTHON="$(command -v python3 || true)"
 cat > "$WORK/sysroot/ios-cross.ini" <<EOF
 [binaries]
 c        = ['$BIN/ios-clang']
@@ -104,7 +113,10 @@ objc     = ['$BIN/ios-clang']
 ar       = ['$BIN/ios-ar']
 ranlib   = ['$BIN/ios-ranlib']
 strip    = ['xcrun', '--sdk', 'iphoneos', 'strip', '-x']
-pkg-config = ['$BIN/ios-pkg-config']
+pkgconfig = ['$BIN/ios-pkg-config']
+python   = ['$HOST_PYTHON']
+$([ -n "$HOST_GLIB_MKENUMS" ] && echo "glib-mkenums = ['$HOST_GLIB_MKENUMS']")
+$([ -n "$HOST_GLIB_RESOURCES" ] && echo "glib-compile-resources = ['$HOST_GLIB_RESOURCES']")
 
 [built-in options]
 c_args      = ['-arch', 'arm64', '-isysroot', '$SDK', '-miphoneos-version-min=$MIN_IOS', '-fPIC']
@@ -112,17 +124,24 @@ cpp_args    = ['-arch', 'arm64', '-isysroot', '$SDK', '-miphoneos-version-min=$M
 objc_args   = ['-arch', 'arm64', '-isysroot', '$SDK', '-miphoneos-version-min=$MIN_IOS', '-fPIC']
 c_link_args = ['-arch', 'arm64', '-isysroot', '$SDK', '-miphoneos-version-min=$MIN_IOS']
 cpp_link_args = ['-arch', 'arm64', '-isysroot', '$SDK', '-miphoneos-version-min=$MIN_IOS']
+objc_link_args = ['-arch', 'arm64', '-isysroot', '$SDK', '-miphoneos-version-min=$MIN_IOS']
 
 [host_machine]
-system     = 'darwin'
+system     = 'ios'
 cpu_family = 'aarch64'
 cpu        = 'arm64'
 endian     = 'little'
 
 [properties]
 needs_exe_wrapper = true
+has_function_pipe2 = false
+has_function_dup3 = false
 EOF
+# 去掉条件行留下的空行，避免 meson 解析到空条目
+grep -v '^$' "$WORK/sysroot/ios-cross.ini" > "$WORK/sysroot/ios-cross.ini.tmp" \
+  && mv "$WORK/sysroot/ios-cross.ini.tmp" "$WORK/sysroot/ios-cross.ini"
 echo "  cross file: $WORK/sysroot/ios-cross.ini"
+echo "  host tools: glib-mkenums=${HOST_GLIB_MKENUMS:-缺失} glib-compile-resources=${HOST_GLIB_RESOURCES:-缺失}"
 
 # ---- 工具函数 ---------------------------------------------------------------
 sha_of() {

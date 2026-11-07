@@ -11,14 +11,14 @@ on:
         description: "要编译的依赖，逗号分隔"
         type: string
         required: false
-        default: "libffi,pcre2,glib,pixman,openssl,proxy-libintl"
+        default: "libffi,pcre2,glib,pixman,proxy-libintl"
   workflow_dispatch:
     inputs:
       packages:
         description: "要编译的依赖，逗号分隔"
         type: string
         required: false
-        default: "libffi,pcre2,glib,pixman,openssl,proxy-libintl"
+        default: "libffi,pcre2,glib,pixman,proxy-libintl"
 
 permissions:
   contents: read
@@ -48,7 +48,9 @@ jobs:
           set -e
           brew update --quiet || true
           brew install --quiet meson ninja pkg-config autoconf automake libtool \
-            gettext bison flex cmake python@3.11 jq 2>&1 | tail -20 || true
+            gettext bison flex cmake python@3.11 jq glib-utils 2>&1 | tail -20 || true
+          # glib-utils 提供 glib-mkenums / glib-compile-resources，是 glib
+          # cross build 必需的 build-machine 工具（UTM check_env 同样要求）
           # 某些工具 runner 已预装，缺哪个补哪个
           for t in meson ninja pkg-config autoreconf bison jq python3; do
             command -v "$t" >/dev/null 2>&1 || { echo "::error::缺少 $t"; exit 1; }
@@ -68,7 +70,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.WORK }}/sysroot
-          key: ios-sysroot-arm64-${{ hashFiles('scripts/build-ios-deps.sh', 'scripts/ios-deps.json', 'scripts/ios-cross.ini') }}-v1
+          key: ios-sysroot-arm64-${{ hashFiles('scripts/build-ios-deps.sh', 'scripts/ios-deps.json') }}-v2
 
       - name: 编译 iOS arm64 静态依赖
         id: deps
