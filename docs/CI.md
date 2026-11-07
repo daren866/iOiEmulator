@@ -19,7 +19,16 @@
 
 1. **Checkout** — `fetch-depth: 0`，保留完整历史便于写入构建信息。
 2. **Show toolchain** — 打印 macOS / Xcode / iPhoneOS SDK 版本。
-3. **Install Tuist and ldid** — Homebrew 装 Tuist（失败则回退官方安装脚本）；`ldid` 可选，缺失时只产出纯未签名 IPA。
+3. **Install Tuist and ldid** — 固定版本（`TUIST_VERSION=4.215.0`）从 GitHub Release
+   直连下载官方 `tuist.zip`（内含 `tuist` 可执行文件与 `ProjectDescription.framework`），
+   解压到 `~/.tuist/bin` 并写入 `GITHUB_PATH`；同时用 `SHASUMS256.txt` 校验。
+   下载失败自动回退 `v4.gh-proxy.org` 镜像。
+   `ldid` 通过 Homebrew 安装，可选，缺失时只产出纯未签名 IPA。
+
+   > 为什么不用 `brew install tuist`：Homebrew 里**没有** `tuist` formula
+   > （会提示 "No available formula with the name tuist"）；
+   > `https://install.tuist.io` 在 CI runner 上返回 **403**。
+   > 直连 release 资源是官方安装脚本的同一来源，最稳妥。
 4. **Generate Xcode project** — `tuist generate --no-open`，断言 `.xcworkspace` 已生成。
 5. **Build unsigned arm64 archive** — 关键参数：
 
@@ -79,7 +88,8 @@ ARCHIVE_PATH=... IPA_DIR=... IPA_NAME=... bash scripts/package-ipa.sh
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
-| `tuist: command not found` | Homebrew 与官方脚本都失败；检查 runner 网络，或在日志里看 fallback 是否执行 |
+| `tuist: command not found` | 不要改用 Homebrew（无此 formula）或 `install.tuist.io`（CI 上 403）；使用工作流里的固定版本 release 直连下载，并确认已写入 `GITHUB_PATH` |
+| Tuist 版本升级导致 manifest 报错 | 调整 `env.TUIST_VERSION`；`Project.swift` / `Tuist.swift` 用的是 Tuist 4.x API |
 | `未生成 xcworkspace` | `Project.swift` 语法与 Tuist 版本不匹配；`Tuist.swift` / `Tuist/Package.swift` 用的是 Tuist 4.x API |
 | `archive 中没有 .app` | 缺少 `SKIP_INSTALL=NO`，或 scheme 未共享 |
 | 二进制不是 arm64 | 检查 `ARCHS=arm64` 是否被 `ONLY_ACTIVE_ARCH` 覆盖 |

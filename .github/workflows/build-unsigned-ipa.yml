@@ -19,6 +19,9 @@ env:
   APP_NAME: iOiEmulator
   ARCHIVE_PATH: ${{ github.workspace }}/build/iOiEmulator.xcarchive
   IPA_DIR: ${{ github.workspace }}/build/ipa
+  # Homebrew 没有 tuist formula，install.tuist.io 也被 CDN 拦成 403，
+  # 因此固定版本直连 GitHub Release 下载官方 tuist.zip。
+  TUIST_VERSION: '4.215.0'
 
 jobs:
   build:
@@ -43,14 +46,43 @@ jobs:
       - name: Install Tuist and ldid
         run: |
           set -e
-          if ! brew install --formula tuist; then
-            echo "::warning::Homebrew 安装 Tuist 失败，改用官方安装脚本"
-            curl -fsSL https://install.tuist.io | bash
-            echo "$HOME/.tuist/bin" >> "$GITHUB_PATH"
+          TUIST_HOME="$HOME/.tuist/bin"
+          mkdir -p "$TUIST_HOME"
+
+          # 优先直连 GitHub Release，失败时走加速镜像
+          BASE="https://github.com/tuist/tuist/releases/download/${TUIST_VERSION}"
+          MIRROR="https://v4.gh-proxy.org/${BASE}"
+          OK=0
+          for URL in "${BASE}/tuist.zip" "${MIRROR}/tuist.zip"; do
+            echo "尝试下载：$URL"
+            if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
+                 -o /tmp/tuist.zip "$URL"; then
+              OK=1
+              break
+            fi
+          done
+          [ "$OK" -eq 1 ] || { echo "::error::Tuist 二进制下载失败"; exit 1; }
+
+          # 校验（SHASUMS256.txt 取不到时降级为仅校验 zip 完整性）
+          if curl -fsSL --max-time 30 "${BASE}/SHASUMS256.txt" -o /tmp/SHASUMS256.txt; then
+            EXPECTED=$(awk '/ tuist\.zip$/ {print $1}' /tmp/SHASUMS256.txt | head -n 1)
+            if [ -n "$EXPECTED" ]; then
+              echo "${EXPECTED}  /tmp/tuist.zip" | shasum -a 256 -c - \
+                || { echo "::error::tuist.zip 校验失败"; exit 1; }
+            fi
+          else
+            echo "::warning::无法获取校验和文件，跳过 SHA256 校验"
           fi
+          unzip -tq /tmp/tuist.zip
+
+          unzip -q -o /tmp/tuist.zip -d "$TUIST_HOME"
+          chmod +x "$TUIST_HOME/tuist"
+          echo "$TUIST_HOME" >> "$GITHUB_PATH"
+          export PATH="$TUIST_HOME:$PATH"
+
           # ldid 用于 TrollStore 需要的 ad-hoc 伪签名；缺失时产出纯未签名 IPA
           brew install ldid || echo "::warning::ldid 不可用，将跳过伪签名"
-          export PATH="$HOME/.tuist/bin:$PATH"
+
           tuist version
 
       - name: Generate Xcode project (Tuist)
