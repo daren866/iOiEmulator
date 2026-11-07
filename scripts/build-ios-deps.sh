@@ -173,8 +173,17 @@ record() {
   printf '{"name":"%s","ok":%s,"stage":"%s","log":"%s","seconds":%s}\n' \
     "$name" "$ok" "$stage" "$log" "$secs" > "$STATUS/$name.json"
   # 变量名必须用 ${}，否则紧随其后的中文全角标点会被 bash 吞进变量名
-  if [ "$ok" = "true" ]; then echo "  [OK]   ${name} (${secs} s)"
-  else echo "  [FAIL] ${name} — ${stage}，日志：${log}"; fi
+  if [ "$ok" = "true" ]; then
+    echo "  [OK]   ${name} (${secs} s)"
+  else
+    echo "  [FAIL] ${name} — ${stage}，日志：${log}"
+    # 直接把失败原因打进 CI 日志，省去下载 artifact 才能诊断
+    if [ -f "$log" ]; then
+      echo "  ---- ${name} 失败日志末 20 行 ----"
+      tail -20 "$log" | sed 's/^/    /'
+      echo "  --------------------------------"
+    fi
+  fi
 }
 
 build_one() {
@@ -210,7 +219,7 @@ build_one() {
       meson)
         case "$name" in
           glib)
-            EXTRA="-Dtests=false -Dinstalled_tests=false -Dglib_assert=false -Dglib_checks=false -Dxattr=false -Dlibmount=disabled -Dselinux=disabled -Dsysprof=disabled -Dman=false -Dgtk_doc=false -Dbsymbolic_functions=false -Dnls=disabled -Dintrospection=disabled"
+            EXTRA="-Dtests=false -Ddtrace=disabled -Dinstalled_tests=false -Dglib_assert=false -Dglib_checks=false -Dxattr=false -Dlibmount=disabled -Dselinux=disabled -Dsysprof=disabled -Dman=false -Dgtk_doc=false -Dbsymbolic_functions=false -Dnls=disabled -Dintrospection=disabled"
             ;;
           pixman)
             EXTRA="-Dtests=disabled -Dgtk=disabled -Dlibpng=disabled -Dopenmp=disabled -Dloongson-mmi=disabled -Dmmx=disabled -Dsse2=disabled -Dssse3=disabled -Dvmx=disabled -Darm-simd=disabled -Dneon=disabled -Da64-neon=disabled"
