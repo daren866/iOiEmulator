@@ -36,12 +36,15 @@ src, build, prefix, out = map(pathlib.Path, sys.argv[1:5])
 #    target_page.h 在 -DCOMPILING_PER_TARGET 下才 #include "cpu-param.h"，
 #    且该 quote-include 需要 -I <src>/target/arm 才能解析。这些标志只出现在
 #    target/arm/*.c 的编译命令里，故对全部命令取并集，保证不漏任何 include
-#    路径或 target 宏。注意 -arch / -isysroot / -I / -F 等是「flag + 参数」配对，
-#    必须把参数一起收进来，否则会变成 `-arch -fPIC` 这种非法命令。
+#    路径或 target 宏。
+#    关键：每个标志必须保持「原始 token 化」（-I 与路径、-arch 与 arm64 是
+#    两个独立 argv）。ios-clang 包裹脚本会自动补 -arch/-isysroot/
+#    -miphoneos-version-min，这里不再收集它们，避免重复或与 wrapper 冲突。
 ccdb = json.loads((build / 'compile_commands.json').read_text())
 
 compiler = None
-includes, frameworks, defines, paired = set(), set(), set(), []
+seen = set()
+base = []
 for c in ccdb:
     args = shlex.split(c['command'])
     if compiler is None and args:
@@ -49,22 +52,23 @@ for c in ccdb:
     i = 0
     while i < len(args):
         a = args[i]
-        if a in ('-I', '-iquote', '-isystem', '-idirafter', '-F', '-arch', '-isysroot'):
+        if a in ('-I', '-iquote', '-isystem', '-idirafter', '-F'):
             if i + 1 < len(args):
-                val = args[i + 1]
-                (frameworks if a == '-F' else includes).add(a + ' ' + val)
-            i += 2; continue
-        if a.startswith(('-I', '-iquote', '-isystem', '-idirafter', '-F')):
-            (frameworks if a.startswith('-F') else includes).add(a)
-        elif a.startswith('-D'):
-            defines.add(a)
+                b = args[i + 1]
+                key = a + ' ' + b
+                if key not in seen:
+                    seen.add(key); base += [a, b]
+                i += 2; continue
+        if a.startswith(('-I', '-iquote', '-isystem', '-idirafter', '-F', '-D')):
+            if a not in seen:
+                seen.add(a); base.append(a)
         elif a.startswith('-miphoneos-version-min=') or a in (
                 '-fPIC', '-fno-pic', '-mno-outline-atomics',
                 '-Wno-error=deprecated-declarations'):
-            defines.add(a)
+            if a not in seen:
+                seen.add(a); base.append(a)
         i += 1
 
-base = sorted(includes) + sorted(frameworks) + sorted(defines)
 base += ['-fPIC', '-I' + str(src / 'contrib/ios-app'),
          '-I' + str(src / 'contrib/macos-app'),
          '-iquote', str(build), '-iquote', str(src)]
