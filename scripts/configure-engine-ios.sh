@@ -110,9 +110,10 @@ PY
 # iOS 原生 EAGL 渲染后端（hw/arm/gles-host.c）在 TARGET_OS_IPHONE 分支
 # include <OpenGLES/ES1/gl.h>，但源码里仍引用了一批 desktop OpenGL 常量
 # （GL_DEPTH_COMPONENT / GL_TEXTURE_CUBE_MAP / GL_UNPACK_ROW_LENGTH / ...），
-# 在 iOS 18 SDK 下报 use of undeclared identifier。上游 build-engine.py
-# 只构建 linux / Android，这条 iOS 路径没有官方 CI 覆盖。这里在 ES1 头之后
-# 补一个「仅当未定义时才生效」的常量兼容头，保留 EAGL 渲染而不降级到 stub。
+# 在 iOS 18 SDK 下报 use of undeclared identifier；同一分支还漏 include
+# ES2/ES3 头，导致 glUseProgram 等被判为隐式声明。上游 build-engine.py
+# 只构建 linux / Android，这条 iOS 路径没有官方 CI 覆盖。这里补 ES2/ES3
+# 头 + 一个「仅当未定义时才生效」的常量兼容头，保留 EAGL 渲染而不降级到 stub。
 GC="$SRC/hw/arm/gl-compat-ios.h"
 python3 - "$GC" "$SRC/hw/arm/gles-host.c" <<'PY'
 import pathlib, sys
@@ -173,11 +174,17 @@ hdr.write_text("\n".join(lines) + "\n")
 s = src.read_text()
 needle = "#include <OpenGLES/ES1/gl.h>\n#include <OpenGLES/ES1/glext.h>\n#endif"
 if needle in s and "gl-compat-ios.h" not in s:
+    # 源码的 iOS 分支只 include ES1 头，却调用了 glUseProgram /
+    # glVertexAttribPointer / glBlendColor 等 ES2 函数。ANGLE 分支靠
+    # <GLES3/gl3.h> 拿到这些声明，iOS 补上 ES2/ES3 头即可（ES3 是 ES2
+    # 超集）。兼容头必须放在 GLES 头之后，#ifndef 才会让 SDK 真值优先。
     src.write_text(s.replace(
         needle,
         "#include <OpenGLES/ES1/gl.h>\n#include <OpenGLES/ES1/glext.h>\n"
+        "#include <OpenGLES/ES2/gl.h>\n#include <OpenGLES/ES2/glext.h>\n"
+        "#include <OpenGLES/ES3/gl.h>\n#include <OpenGLES/ES3/glext.h>\n"
         '#include "gl-compat-ios.h"\n#endif', 1))
-    print("  iOS EAGL 分支已补 %d 个 desktop GL 常量" % len(consts))
+    print("  iOS EAGL 分支已补 ES2/ES3 头 + %d 个 desktop GL 常量" % len(consts))
 else:
     print("  iOS EAGL include 结构不符或已打过补丁，跳过")
 PY
