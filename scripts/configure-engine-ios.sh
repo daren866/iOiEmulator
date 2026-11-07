@@ -90,6 +90,23 @@ p.write_text("\n".join(out) + "\n")
 print(f"  保留 subdir('arm')，禁用 {len(disabled)} 个非 arm target: {','.join(disabled)}")
 PY
 
+# meson.build 的构建摘要里有一句
+#   meson.get_compiler('c', native: true).cmd_array()
+# 当 cross file 的 host_machine 与 build machine 同为 darwin/aarch64 时，
+# meson 会判为「未给 build machine 指定 C 编译器」而中止 setup。这一行
+# 只用于打印 "Host C compiler"，改用 host 编译器不影响任何实际编译。
+MB="$SRC/meson.build"
+python3 - "$MB" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+old = "meson.get_compiler('c', native: true)"
+if old in s:
+    p.write_text(s.replace(old, "meson.get_compiler('c')", 1))
+    print("  构建摘要的 native C 编译器引用已改用 host 编译器")
+else:
+    print("  未找到 native C 编译器引用，跳过")
+PY
+
 echo
 echo "== configure =="
 cd "$BUILD"
@@ -138,7 +155,8 @@ echo "  ---- 末 40 行 ----"
 tail -40 "$LOG" || true
 
 if [ "$RC" -ne 0 ]; then
-  echo "::error::QEMU configure 失败，常见原因：sysroot 中 glib-2.0.pc 缺失（依赖 ② 未成功）"
+  echo "::error::QEMU configure 失败；上面已打印 configure.log 末 40 行，请按其中的 ERROR 定位"
+  echo "::notice::常见原因依次为：sysroot 缺少 glib-2.0.pc、meson 依赖探测失败、cross/native machine file 冲突"
   exit "$RC"
 fi
 
