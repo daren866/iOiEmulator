@@ -107,6 +107,81 @@ else:
     print("  未找到 native C 编译器引用，跳过")
 PY
 
+# iOS 原生 EAGL 渲染后端（hw/arm/gles-host.c）在 TARGET_OS_IPHONE 分支
+# include <OpenGLES/ES1/gl.h>，但源码里仍引用了一批 desktop OpenGL 常量
+# （GL_DEPTH_COMPONENT / GL_TEXTURE_CUBE_MAP / GL_UNPACK_ROW_LENGTH / ...），
+# 在 iOS 18 SDK 下报 use of undeclared identifier。上游 build-engine.py
+# 只构建 linux / Android，这条 iOS 路径没有官方 CI 覆盖。这里在 ES1 头之后
+# 补一个「仅当未定义时才生效」的常量兼容头，保留 EAGL 渲染而不降级到 stub。
+GC="$SRC/hw/arm/gl-compat-ios.h"
+python3 - "$GC" "$SRC/hw/arm/gles-host.c" <<'PY'
+import pathlib, sys
+hdr, src = map(pathlib.Path, sys.argv[1:3])
+consts = [
+    ("GL_DEPTH_COMPONENT",              "0x1902"),
+    ("GL_STENCIL_INDEX",                "0x1901"),
+    ("GL_UNSIGNED_INT_8_8_8_8",         "0x8035"),
+    ("GL_UNSIGNED_INT_8_8_8_8_REV",     "0x8367"),
+    ("GL_UNSIGNED_SHORT_4_4_4_4_REV",   "0x8365"),
+    ("GL_UNSIGNED_SHORT_1_5_5_5_REV",   "0x8366"),
+    ("GL_UNPACK_ROW_LENGTH",            "0x0CF2"),
+    ("GL_UNPACK_SKIP_ROWS",             "0x0CF3"),
+    ("GL_UNPACK_SKIP_PIXELS",           "0x0CF4"),
+    ("GL_UNPACK_IMAGE_HEIGHT",          "0x806E"),
+    ("GL_UNPACK_SKIP_IMAGES",           "0x806D"),
+    ("GL_PACK_ROW_LENGTH",              "0x0D02"),
+    ("GL_PACK_SKIP_ROWS",               "0x0D03"),
+    ("GL_PACK_SKIP_PIXELS",             "0x0D04"),
+    ("GL_PACK_IMAGE_HEIGHT",            "0x806C"),
+    ("GL_PACK_SKIP_IMAGES",             "0x806B"),
+    ("GL_MAX_ELEMENTS_VERTICES",        "0x80E8"),
+    ("GL_MAX_ELEMENTS_INDICES",         "0x80E9"),
+    ("GL_TEXTURE_CUBE_MAP",             "0x8513"),
+    ("GL_TEXTURE_CUBE_MAP_POSITIVE_X",  "0x8515"),
+    ("GL_TEXTURE_CUBE_MAP_NEGATIVE_X",  "0x8516"),
+    ("GL_TEXTURE_CUBE_MAP_POSITIVE_Y",  "0x8517"),
+    ("GL_TEXTURE_CUBE_MAP_NEGATIVE_Y",  "0x8518"),
+    ("GL_TEXTURE_CUBE_MAP_POSITIVE_Z",  "0x8519"),
+    ("GL_TEXTURE_CUBE_MAP_NEGATIVE_Z",  "0x851A"),
+    ("GL_TEXTURE_MAX_LEVEL",            "0x813D"),
+    ("GL_TEXTURE_BASE_LEVEL",           "0x813C"),
+    ("GL_TEXTURE_MIN_LOD",              "0x813A"),
+    ("GL_TEXTURE_MAX_LOD",              "0x813B"),
+    ("GL_TEXTURE_WRAP_R",               "0x8072"),
+    ("GL_TEXTURE_3D",                   "0x806F"),
+    ("GL_CLAMP_TO_BORDER",              "0x812D"),
+    ("GL_MIRRORED_REPEAT",              "0x8370"),
+    ("GL_GENERATE_MIPMAP",              "0x8191"),
+    ("GL_RGB8",                         "0x8051"),
+    ("GL_RGBA8",                        "0x8058"),
+    ("GL_BGR",                          "0x80E0"),
+    ("GL_BGRA",                         "0x80E1"),
+    ("GL_DEPTH_COMPONENT24",            "0x81A6"),
+    ("GL_DEPTH_COMPONENT32",            "0x81A7"),
+    ("GL_TEXTURE_RECTANGLE",            "0x84F5"),
+    ("GL_TEXTURE_1D",                   "0x0DE0"),
+]
+lines = ["/* iOS ES1 headers lack these desktop GL enum values.",
+         " * Define only when absent so real ES1/OES values win. */",
+         "#ifndef GLES_HOST_GL_COMPAT_IOS_H",
+         "#define GLES_HOST_GL_COMPAT_IOS_H", ""]
+for name, value in consts:
+    lines += ["#ifndef " + name, "#define " + name + " " + value, "#endif"]
+lines += ["", "#endif"]
+hdr.write_text("\n".join(lines) + "\n")
+
+s = src.read_text()
+needle = "#include <OpenGLES/ES1/gl.h>\n#include <OpenGLES/ES1/glext.h>\n#endif"
+if needle in s and "gl-compat-ios.h" not in s:
+    src.write_text(s.replace(
+        needle,
+        "#include <OpenGLES/ES1/gl.h>\n#include <OpenGLES/ES1/glext.h>\n"
+        '#include "gl-compat-ios.h"\n#endif', 1))
+    print("  iOS EAGL 分支已补 %d 个 desktop GL 常量" % len(consts))
+else:
+    print("  iOS EAGL include 结构不符或已打过补丁，跳过")
+PY
+
 echo
 echo "== configure =="
 cd "$BUILD"
