@@ -1,0 +1,42 @@
+{
+  "$comment": "引擎源码锁定清单。两个 tarball 的 SHA256 已实测核对，与 LightTouch v0.0.13 Release 页公布值一致。仓库不附带 Apple 固件。",
+  "release": "v0.0.13",
+  "release_url": "https://github.com/blake-lucas/LightTouch/releases/tag/v0.0.13",
+  "download_base": "https://github.com/blake-lucas/LightTouch/releases/download/v0.0.13",
+  "artifacts": [
+    {
+      "file": "LightTouch-v0.0.13-source.tar.gz",
+      "role": "app_shell",
+      "repo": "blake-lucas/LightTouch",
+      "ref": "v0.0.13",
+      "commit": "28792077",
+      "bytes": 3325818,
+      "sha256": "668db421f229e7575c2e056a08f672f39f1cf9bf8ffe4efde6331448dfffdb1f",
+      "license": "GPL-2.0-or-later",
+      "contents": "Rust workspace + Android Kotlin/JNI + 各平台构建脚本：FirmwareKit(IPSW 制备)、Legacy Store、usbmux/AFC、UI、网络代理"
+    },
+    {
+      "file": "qemu-ios-v0.0.13-source.tar.gz",
+      "role": "emulator_engine",
+      "repo": "blake-lucas/qemu-ios",
+      "ref": "lighttouch-v0.0.13",
+      "commit": "123cd6d9bb",
+      "bytes": 55410110,
+      "sha256": "2a88f42b3d103dc2dfb0f362349079b043b2b3d547068a90b06625079ffae369",
+      "license": "GPL-2.0",
+      "base_qemu": "8.2.0",
+      "contents": "QEMU fork：8 块老 Apple 板子的设备模型、host GL bridge、guest agent hypercall、baseband、NAND/NOR"
+    }
+  ],
+  "upstream": [
+    { "repo": "samhenrigold/LightTouchMac", "note": "原版 macOS App，本项目的 fork 来源；明确声明不做 iOS 版" },
+    { "repo": "samhenrigold/qemu-ios", "note": "原版引擎" },
+    { "repo": "devos50/qemu-ios", "note": "更早的 iPod touch 1G/2G QEMU 研究" },
+    { "repo": "qemu/qemu", "note": "上游 QEMU 8.2.0" },
+    { "repo": "utmapp/qemu", "note": "iOS host 支持补丁所在分支（QEMU 10.0.2），移植 rebase 目标" }
+  ],
+  "firmware": {
+    "included": false,
+    "note": "IPSW、解密组件、NAND 镜像、SDK、制备好的设备均不在本仓库，也不在 IPA 内。"
+  }
+}

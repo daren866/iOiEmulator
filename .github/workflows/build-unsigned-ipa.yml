@@ -1,0 +1,150 @@
+name: Build Unsigned IPA and Publish to Releases
+
+# 任意分支有新提交即触发；显式排除 tag 推送，避免本工作流自己创建的
+# build-N tag 再次触发构建造成死循环。
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unsigned-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_NAME: iOiEmulator
+  ARCHIVE_PATH: ${{ github.workspace }}/build/iOiEmulator.xcarchive
+  IPA_DIR: ${{ github.workspace }}/build/ipa
+
+jobs:
+  build:
+    name: Build arm64 unsigned IPA
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          echo "commit=${GITHUB_SHA}"
+          echo "ref=${GITHUB_REF_NAME}"
+
+      - name: Install Tuist and ldid
+        run: |
+          set -e
+          if ! brew install --formula tuist; then
+            echo "::warning::Homebrew 安装 Tuist 失败，改用官方安装脚本"
+            curl -fsSL https://install.tuist.io | bash
+            echo "$HOME/.tuist/bin" >> "$GITHUB_PATH"
+          fi
+          # ldid 用于 TrollStore 需要的 ad-hoc 伪签名；缺失时产出纯未签名 IPA
+          brew install ldid || echo "::warning::ldid 不可用，将跳过伪签名"
+          export PATH="$HOME/.tuist/bin:$PATH"
+          tuist version
+
+      - name: Generate Xcode project (Tuist)
+        run: |
+          export PATH="$HOME/.tuist/bin:$PATH"
+          tuist generate --no-open
+          test -d "${APP_NAME}.xcworkspace" || { echo "::error::未生成 xcworkspace"; exit 1; }
+          ls -la "${APP_NAME}.xcworkspace" "${APP_NAME}.xcodeproj"
+
+      - name: Build unsigned arm64 archive
+        run: |
+          xcodebuild clean archive \
+            -workspace "${APP_NAME}.xcworkspace" \
+            -scheme "${APP_NAME}" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "${ARCHIVE_PATH}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            ENABLE_BITCODE=NO \
+            SKIP_INSTALL=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Verify archive binary
+        run: |
+          APP_BUNDLE=$(find "${ARCHIVE_PATH}/Products/Applications" -maxdepth 1 -name '*.app' -type d | head -n 1)
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "::error::archive 中没有 .app"
+            exit 1
+          fi
+          BIN="$APP_BUNDLE/${APP_NAME}"
+          echo "二进制：$BIN"
+          lipo -info "$BIN"
+          lipo -archs "$BIN" | grep -qw arm64 || { echo "::error::不是 arm64"; exit 1; }
+          file "$BIN"
+          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP_BUNDLE/Info.plist" || true
+          codesign -dv "$BIN" 2>&1 || echo "（预期：未签名）"
+
+      - name: Package IPA
+        id: package
+        run: |
+          SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          export IPA_NAME="${APP_NAME}_unsigned_arm64_${SHORT_SHA}_b${GITHUB_RUN_NUMBER}.ipa"
+          echo "IPA_NAME=${IPA_NAME}" >> "$GITHUB_ENV"
+          echo "ipa_name=${IPA_NAME}" >> "$GITHUB_OUTPUT"
+          bash scripts/package-ipa.sh
+
+      - name: IPA sanity check
+        run: |
+          IPA="${IPA_DIR}/${IPA_NAME}"
+          test -f "$IPA" || { echo "::error::IPA 不存在"; exit 1; }
+          unzip -t "$IPA" | tail -3
+          unzip -l "$IPA" | grep -E "Payload/${APP_NAME}\.app/${APP_NAME}$"
+          echo "大小：$(du -h "$IPA" | cut -f1)"
+          cat "${IPA_DIR}/SHA256SUMS"
+
+      - name: Upload to Actions Artifacts (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-ipa-${{ github.run_number }}
+          path: |
+            ${{ env.IPA_DIR }}/*.ipa
+            ${{ env.IPA_DIR }}/SHA256SUMS
+            ${{ env.IPA_DIR }}/build-info.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Publish IPA to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: "iOiEmulator 未签名 IPA · build #${{ github.run_number }}"
+          prerelease: true
+          body: |
+            ### 未签名 arm64 IPA（自用 / 侧载）
+
+            | 项 | 值 |
+            | --- | --- |
+            | Commit | `${{ github.sha }}` |
+            | 分支 | `${{ github.ref_name }}` |
+            | 触发 | `${{ github.event_name }}` |
+            | 文件名 | `${{ steps.package.outputs.ipa_name }}` |
+            | 引擎 | **未接入 qemu-ios**（见 `docs/PORTING.md`） |
+
+            > 该 IPA 未做 Apple 签名，当前仅含应用外壳与移植脚手架。
+            > 可用 TrollStore 直接安装，或用 AltStore / SideStore / Sideloadly
+            > 用自己的证书重签后安装。校验值见 `SHA256SUMS`。
+          files: |
+            ${{ env.IPA_DIR }}/*.ipa
+            ${{ env.IPA_DIR }}/SHA256SUMS
+            ${{ env.IPA_DIR }}/build-info.txt
