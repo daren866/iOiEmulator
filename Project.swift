@@ -19,7 +19,13 @@ let deploymentTargets: DeploymentTargets = .iOS("15.0")
 
 // 写成单个字符串字面量：多段 `+` 拼接会让 Tuist 的 manifest 编译器
 // 报 "unable to type-check this expression in reasonable time"。
-let engineLDFlags: SettingValue = "$(inherited) -lqemu-arm -lz -liconv -framework CoreFoundation -framework CoreGraphics -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework OpenGLES -framework IOSurface -framework ImageIO -framework Security -framework AudioToolbox -framework Foundation"
+// 注意：libqemu-arm.a 必须用 -force_load 整体拉入，不能用普通的 -lqemu-arm。
+// 原因：该 .a 是把「QEMU 全部 objects + 入口 objects + sysroot 依赖 .a」用
+// libtool -static 合并的单一归档；若用 -lqemu-arm，链接器单遍扫描时只会拉入
+// App 直接引用的成员（如 qemu-ios-ui.o），而它依赖的 qemu_mutex_init 等 QEMU
+// 内部符号所在成员若排在后面，单遍扫描就解析不到，最终报 "Undefined symbols"。
+// -force_load 强制拉入全部成员，再由 Xcode 的 -dead_strip 回收未用符号。
+let engineLDFlags: SettingValue = "$(inherited) -Wl,-force_load,\(engineDir)/libqemu-arm.a -lz -liconv -framework CoreFoundation -framework CoreGraphics -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework OpenGLES -framework IOSurface -framework ImageIO -framework Security -framework AudioToolbox -framework Foundation"
 
 var appSettings: [String: SettingValue] = [
     "IPHONEOS_DEPLOYMENT_TARGET": "15.0",
