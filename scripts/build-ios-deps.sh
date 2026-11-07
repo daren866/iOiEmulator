@@ -194,6 +194,17 @@ build_one() {
   local name="$1" archive="$2" dir="$3" url="$4" sha="$5" kind="$6"
   local log="$STATUS/$name.log"
   local t0=$SECONDS
+  # libgpg-error / libgcrypt 的 autotools 会编译并运行 build-machine 工具
+  # （mkheader / mkerrcodes / gost-s-box）。它们走 CC_FOR_BUILD，但
+  # LDFLAGS_FOR_BUILD 会继承全局 LDFLAGS（含 iPhoneOS sysroot），链接出的
+  # iOS 二进制在 macOS 上运行被 Killed: 9。ios-clang wrapper 自带全部 iOS
+  # flags，清空 LDFLAGS 不影响目标库；再用 make 变量强制覆盖 host 工具参数。
+  local host_build_fix=""
+  case "$name" in
+    libgpg-error|libgcrypt)
+      host_build_fix="CC_FOR_BUILD=/usr/bin/cc LDFLAGS= LDFLAGS_FOR_BUILD= CFLAGS_FOR_BUILD=-O2 CPPFLAGS_FOR_BUILD="
+      ;;
+  esac
   echo "== 构建 $name ($kind) =="
 
   if ! fetch_archive "$url" "$SRC/$archive" "$sha" >"$log" 2>&1; then
@@ -223,6 +234,15 @@ build_one() {
             ;;
           *)      EXTRA="" ;;
         esac
+        if [ -n "$host_build_fix" ]; then
+          export LDFLAGS="" LDFLAGS_FOR_BUILD=""
+          export CFLAGS_FOR_BUILD="-O2" CPPFLAGS_FOR_BUILD=""
+          export CC_FOR_BUILD=/usr/bin/cc
+          # libgcrypt 的 configure 会在 PATH 里找 gpgrt-config / gpg-error-config；
+          # runner 上 Homebrew 装了 libgpg-error，必须让本 sysroot 的优先，
+          # 否则会混入 macOS 的头文件与 dylib。
+          export PATH="$PREFIX/bin:$PATH"
+        fi
         ./configure --host="$HOST_TRIPLE" --prefix="$PREFIX" \
           --disable-shared --enable-static $EXTRA
         ;;
@@ -262,7 +282,7 @@ build_one() {
     case "$kind" in
       openssl) make -j"$JOBS" build_libs ;;
       meson)   ninja -C build -j"$JOBS" ;;
-      *)       make -j"$JOBS" ;;
+      *)       make -j"$JOBS" $host_build_fix ;;
     esac
   ) >>"$log" 2>&1 || { record "$name" false "$stage" "$log" $((SECONDS-t0)); return 0; }
 
@@ -272,7 +292,7 @@ build_one() {
     case "$kind" in
       openssl) make install_dev ;;
       meson)   ninja -C build install ;;
-      *)       make install ;;
+      *)       make install $host_build_fix ;;
     esac
   ) >>"$log" 2>&1 || { record "$name" false "$stage" "$log" $((SECONDS-t0)); return 0; }
 
