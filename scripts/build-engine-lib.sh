@@ -36,32 +36,33 @@ src, build, prefix, out = map(pathlib.Path, sys.argv[1:5])
 #    target_page.h 在 -DCOMPILING_PER_TARGET 下才 #include "cpu-param.h"，
 #    且该 quote-include 需要 -I <src>/target/arm 才能解析。这些标志只出现在
 #    target/arm/*.c 的编译命令里，故对全部命令取并集，保证不漏任何 include
-#    路径或 target 宏。
+#    路径或 target 宏。注意 -arch / -isysroot / -I / -F 等是「flag + 参数」配对，
+#    必须把参数一起收进来，否则会变成 `-arch -fPIC` 这种非法命令。
 ccdb = json.loads((build / 'compile_commands.json').read_text())
 
 compiler = None
-includes, frameworks, defines = set(), set(), set()
-keep = {'-arch', '-isysroot', '-miphoneos-version-min', '-fPIC', '-fno-pic',
-        '-mno-outline-atomics', '-Wno-error=deprecated-declarations'}
+includes, frameworks, defines, paired = set(), set(), set(), []
 for c in ccdb:
     args = shlex.split(c['command'])
     if compiler is None and args:
         compiler = args[:1]
-    in_inc = False
-    for a in args:
-        if in_inc:
-            includes.add(a); in_inc = False; continue
-        if a in ('-I', '-iquote', '-isystem', '-idirafter'):
-            in_inc = True; continue
-        if a == '-F':
-            in_inc = True; continue
-        if a.startswith('-I') or a.startswith('-iquote') or a.startswith('-isystem') \
-           or a.startswith('-idirafter') or a.startswith('-F'):
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ('-I', '-iquote', '-isystem', '-idirafter', '-F', '-arch', '-isysroot'):
+            if i + 1 < len(args):
+                val = args[i + 1]
+                (frameworks if a == '-F' else includes).add(a + ' ' + val)
+            i += 2; continue
+        if a.startswith(('-I', '-iquote', '-isystem', '-idirafter', '-F')):
             (frameworks if a.startswith('-F') else includes).add(a)
         elif a.startswith('-D'):
             defines.add(a)
-        elif a in keep:
+        elif a.startswith('-miphoneos-version-min=') or a in (
+                '-fPIC', '-fno-pic', '-mno-outline-atomics',
+                '-Wno-error=deprecated-declarations'):
             defines.add(a)
+        i += 1
 
 base = sorted(includes) + sorted(frameworks) + sorted(defines)
 base += ['-fPIC', '-I' + str(src / 'contrib/ios-app'),
