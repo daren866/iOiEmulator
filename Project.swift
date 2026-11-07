@@ -17,6 +17,10 @@ let engineLinked = fileManager.fileExists(atPath: "\(engineDir)/libqemu-arm.a")
 
 let deploymentTargets: DeploymentTargets = .iOS("15.0")
 
+// 写成单个字符串字面量：多段 `+` 拼接会让 Tuist 的 manifest 编译器
+// 报 "unable to type-check this expression in reasonable time"。
+let engineLDFlags: String = "$(inherited) -lqemu-arm -lz -liconv -framework CoreFoundation -framework CoreGraphics -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework OpenGLES -framework IOSurface -framework ImageIO -framework Security -framework AudioToolbox -framework Foundation"
+
 var appSettings: [String: SettingValue] = [
     "IPHONEOS_DEPLOYMENT_TARGET": "15.0",
     "TARGETED_DEVICE_FAMILY": "1,2",
@@ -24,23 +28,20 @@ var appSettings: [String: SettingValue] = [
     "SWIFT_ACTIVE_COMPILATION_CONDITIONS": engineLinked ? "ENGINE_LINKED" : "SHELL_ONLY"
 ]
 
-// EngineLinked/ 故意放在工程根（不在 iOiEmulator/ 下），这样默认的
-// sources glob 天然不会包含它，无需依赖 Tuist 版本相关的 excluding 语法。
-var appSources: [SourceFileGlob] = ["iOiEmulator/**/*.swift"]
-
 if engineLinked {
-    appSources.append("EngineLinked/**/*.swift")
     appSettings["LIBRARY_SEARCH_PATHS"] = "$(inherited) \(engineDir)"
     appSettings["HEADER_SEARCH_PATHS"] = "$(inherited) \(engineDir)/include"
     // libqemu-arm.a 已由 build-engine-lib.sh 把 QEMU objects 与 sysroot 依赖
     // 全部合并进单个静态库，因此这里只需 -lqemu-arm + 系统 framework。
-    appSettings["OTHER_LDFLAGS"] =
-        "$(inherited) -lqemu-arm -lz -liconv" +
-        " -framework CoreFoundation -framework CoreGraphics" +
-        " -framework CoreMedia -framework CoreVideo -framework VideoToolbox" +
-        " -framework OpenGLES -framework IOSurface -framework ImageIO" +
-        " -framework Security -framework AudioToolbox -framework Foundation"
+    appSettings["OTHER_LDFLAGS"] = engineLDFlags
 }
+
+// EngineLinked/ 故意放在工程根（不在 iOiEmulator/ 下），这样默认的
+// sources glob 天然不会包含它，无需依赖 Tuist 版本相关的 excluding 语法。
+// 类型必须是 SourceFilesList，不能是 [SourceFileGlob]。
+let appSources: SourceFilesList = engineLinked
+    ? ["iOiEmulator/**/*.swift", "EngineLinked/**/*.swift"]
+    : ["iOiEmulator/**/*.swift"]
 
 let project = Project(
     name: "iOiEmulator",
