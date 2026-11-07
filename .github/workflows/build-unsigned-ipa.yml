@@ -1,12 +1,28 @@
 name: Build Unsigned IPA and Publish to Releases
 
-# 任意分支有新提交即触发；显式排除 tag 推送，避免本工作流自己创建的
-# build-N tag 再次触发构建造成死循环。
+# 每次提交自动打包：显式跑在 Apple Silicon macOS runner 上
+# （xcodebuild / iphoneos SDK 只有 macOS 提供；公开仓库免费且不限时长）。
+#
+# 也可被 engine-pipeline.yml 通过 workflow_call 调用，此时会尝试把
+# 同一 run 内 ③ 产出的 libqemu-arm.a 链接进 IPA。
 on:
   push:
     branches: ['**']
     tags-ignore: ['**']
+  workflow_call:
+    inputs:
+      engine_artifact:
+        description: "同 run 内引擎产物 artifact 名（留空表示不链接引擎）"
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
+    inputs:
+      engine_artifact:
+        description: "引擎产物 artifact 名（留空则尝试 engine-latest Release）"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -19,6 +35,7 @@ env:
   APP_NAME: iOiEmulator
   ARCHIVE_PATH: ${{ github.workspace }}/build/iOiEmulator.xcarchive
   IPA_DIR: ${{ github.workspace }}/build/ipa
+  ENGINE_ARTIFACT_DIR: ${{ github.workspace }}/.engine-work/engine-artifact
   # Homebrew 没有 tuist formula，install.tuist.io 也被 CDN 拦成 403，
   # 因此固定版本直连 GitHub Release 下载官方 tuist.zip。
   TUIST_VERSION: '4.215.0'
@@ -26,8 +43,8 @@ env:
 jobs:
   build:
     name: Build arm64 unsigned IPA
-    runs-on: macos-latest
-    timeout-minutes: 45
+    runs-on: macos-15
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -35,13 +52,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Show toolchain
+      - name: 显示 macOS arm64 工具链
         run: |
           sw_vers
+          echo "arch      : $(uname -m)"
           xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
+          echo "iphoneos  : $(xcrun --sdk iphoneos --show-sdk-version)"
           echo "commit=${GITHUB_SHA}"
           echo "ref=${GITHUB_REF_NAME}"
+
+      - name: 下载同 run 的引擎产物（可选）
+        if: ${{ github.event_name != 'push' && inputs.engine_artifact != '' }}
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ${{ inputs.engine_artifact }}
+          path: ${{ env.ENGINE_ARTIFACT_DIR }}
+
+      - name: 准备引擎链接（缺失则照常产出外壳 IPA）
+        id: engine
+        env:
+          ENGINE_ARTIFACT_DIR: ${{ env.ENGINE_ARTIFACT_DIR }}
+          ENGINE_RELEASE_TAG: engine-latest
+        run: bash scripts/prepare-engine-link.sh
 
       - name: Install Tuist and ldid
         run: |
@@ -49,7 +82,6 @@ jobs:
           TUIST_HOME="$HOME/.tuist/bin"
           mkdir -p "$TUIST_HOME"
 
-          # 优先直连 GitHub Release，失败时走加速镜像
           BASE="https://github.com/tuist/tuist/releases/download/${TUIST_VERSION}"
           MIRROR="https://v4.gh-proxy.org/${BASE}"
           OK=0
@@ -63,7 +95,6 @@ jobs:
           done
           [ "$OK" -eq 1 ] || { echo "::error::Tuist 二进制下载失败"; exit 1; }
 
-          # 校验（SHASUMS256.txt 取不到时降级为仅校验 zip 完整性）
           if curl -fsSL --max-time 30 "${BASE}/SHASUMS256.txt" -o /tmp/SHASUMS256.txt; then
             EXPECTED=$(awk '/ tuist\.zip$/ {print $1}' /tmp/SHASUMS256.txt | head -n 1)
             if [ -n "$EXPECTED" ]; then
@@ -90,6 +121,7 @@ jobs:
           export PATH="$HOME/.tuist/bin:$PATH"
           tuist generate --no-open
           test -d "${APP_NAME}.xcworkspace" || { echo "::error::未生成 xcworkspace"; exit 1; }
+          echo "engine_linked=${ENGINE_LINKED:-false}"
           ls -la "${APP_NAME}.xcworkspace" "${APP_NAME}.xcodeproj"
 
       - name: Build unsigned arm64 archive
@@ -142,6 +174,7 @@ jobs:
           unzip -l "$IPA" | grep -E "Payload/${APP_NAME}\.app/${APP_NAME}$"
           echo "大小：$(du -h "$IPA" | cut -f1)"
           cat "${IPA_DIR}/SHA256SUMS"
+          grep -E "^engine_linked" "${IPA_DIR}/build-info.txt" || true
 
       - name: Upload to Actions Artifacts (backup)
         uses: actions/upload-artifact@v4
@@ -171,11 +204,12 @@ jobs:
             | 分支 | `${{ github.ref_name }}` |
             | 触发 | `${{ github.event_name }}` |
             | 文件名 | `${{ steps.package.outputs.ipa_name }}` |
-            | 引擎 | **未接入 qemu-ios**（见 `docs/PORTING.md`） |
+            | Runner | `macos-15`（Apple Silicon） |
+            | 引擎 | `${{ steps.engine.outputs.engine_linked == 'true' && 'libqemu-arm 已链接（未经真机验证）' || '未接入 qemu-ios（见 docs/PORTING.md）' }}` |
 
-            > 该 IPA 未做 Apple 签名，当前仅含应用外壳与移植脚手架。
-            > 可用 TrollStore 直接安装，或用 AltStore / SideStore / Sideloadly
-            > 用自己的证书重签后安装。校验值见 `SHA256SUMS`。
+            > 该 IPA 未做 Apple 签名。可用 TrollStore 直接安装，或用
+            > AltStore / SideStore / Sideloadly 用自己的证书重签后安装。
+            > 校验值见 `SHA256SUMS`。引擎流水线见 `engine-pipeline.yml`。
           files: |
             ${{ env.IPA_DIR }}/*.ipa
             ${{ env.IPA_DIR }}/SHA256SUMS

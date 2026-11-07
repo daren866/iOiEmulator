@@ -1,0 +1,98 @@
+name: "引擎 ② iOS arm64 依赖 sysroot (macOS arm64)"
+
+# 交叉编译 QEMU 需要的最小依赖集，全部编成 iOS arm64 静态库。
+# 不用 UTM 的全家桶 build_dependencies.sh：它会连带编译 gstreamer / spice-gtk /
+# ANGLE / Vulkan / MoltenVK，在 3 核 7GB / 14GB 的标准 macOS runner 上必然超时或撑爆磁盘。
+# 这里只编 qemu-ios configure 真正探测到的库。
+on:
+  workflow_call:
+    inputs:
+      packages:
+        description: "要编译的依赖，逗号分隔"
+        type: string
+        required: false
+        default: "libffi,pcre2,glib,pixman,openssl,proxy-libintl"
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "要编译的依赖，逗号分隔"
+        type: string
+        required: false
+        default: "libffi,pcre2,glib,pixman,openssl,proxy-libintl"
+
+permissions:
+  contents: read
+
+env:
+  WORK: ${{ github.workspace }}/.engine-work
+  PACKAGES: ${{ inputs.packages }}
+  IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+
+jobs:
+  sysroot:
+    name: 交叉编译依赖 → sysroot
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 显示工具链
+        run: |
+          sw_vers
+          echo "arch      : $(uname -m)"
+          echo "iphoneos  : $(xcrun --sdk iphoneos --show-sdk-version)"
+
+      - name: 安装构建工具 (Homebrew)
+        run: |
+          set -e
+          brew update --quiet || true
+          brew install --quiet meson ninja pkg-config autoconf automake libtool \
+            gettext bison flex cmake python@3.11 jq 2>&1 | tail -20 || true
+          # 某些工具 runner 已预装，缺哪个补哪个
+          for t in meson ninja pkg-config autoreconf bison jq python3; do
+            command -v "$t" >/dev/null 2>&1 || { echo "::error::缺少 $t"; exit 1; }
+          done
+          echo "PATH=$PATH"
+          meson --version
+          ninja --version
+
+      - name: 下载源码清单（由 ① 产出）
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: engine-source
+          path: ${{ env.WORK }}
+
+      - name: 依赖产物缓存
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.WORK }}/sysroot
+          key: ios-sysroot-arm64-${{ hashFiles('scripts/build-ios-deps.sh', 'scripts/ios-deps.json', 'scripts/ios-cross.ini') }}-v1
+
+      - name: 编译 iOS arm64 静态依赖
+        id: deps
+        env:
+          WORK: ${{ env.WORK }}
+          PACKAGES: ${{ env.PACKAGES }}
+          LT_JOBS: "3"
+          SKIP_IF_CACHED: "1"
+        run: bash scripts/build-ios-deps.sh
+
+      - name: 生成 sysroot 报告
+        if: always()
+        env:
+          WORK: ${{ env.WORK }}
+        run: bash scripts/sysroot-report.sh
+
+      - name: 上传 sysroot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-sysroot
+          path: |
+            ${{ env.WORK }}/sysroot/
+            ${{ env.WORK }}/sysroot-report.json
+          retention-days: 7
+          if-no-files-found: warn
+          compression-level: 6

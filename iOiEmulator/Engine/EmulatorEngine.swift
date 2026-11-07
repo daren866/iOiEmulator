@@ -55,11 +55,17 @@ final class UnavailableEngine: EmulatorEngine {
 
 enum EngineError: LocalizedError {
     case notLinked
+    case alreadyLaunched
+    case invalidFrame
 
     var errorDescription: String? {
         switch self {
         case .notLinked:
             return "libqemu-arm 尚未编译进本 App。请按 docs/PORTING.md 完成引擎移植。"
+        case .alreadyLaunched:
+            return "QEMU 一个进程只能启动一次（qemu-ios-ui.h 约束），请重启 App。"
+        case .invalidFrame:
+            return "引擎返回的帧缓冲无效。"
         }
     }
 }

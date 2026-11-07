@@ -1,0 +1,59 @@
+name: "引擎 ⋯ 全链编排 (macOS arm64)"
+
+# 一键串起 ① 源码 → ② 依赖 → ③ QEMU → ④ IPA。
+# 三个被调用的 reusable workflow 与本次 run 共享 artifact 命名空间，
+# 因此不需要手动传 run-id；每一步都可以单独在 Actions 页面手动触发调试。
+#
+# 注意：push 不会触发本流水线（QEMU 编译动辄数十分钟），
+# 每次提交自动打包由 build-unsigned-ipa.yml 独立负责。
+on:
+  workflow_dispatch:
+    inputs:
+      configure_only:
+        description: "引擎阶段只做 configure（快速诊断）"
+        type: boolean
+        required: false
+        default: true
+      build_ipa:
+        description: "引擎阶段结束后重新打包 IPA"
+        type: boolean
+        required: false
+        default: true
+      packages:
+        description: "依赖集合"
+        type: string
+        required: false
+        default: "libffi,pcre2,glib,pixman,openssl,proxy-libintl"
+
+permissions:
+  contents: write
+
+jobs:
+  source:
+    name: ① 源码
+    uses: ./.github/workflows/engine-source.yml
+
+  sysroot:
+    name: ② 依赖
+    needs: source
+    uses: ./.github/workflows/engine-sysroot.yml
+    with:
+      packages: ${{ inputs.packages }}
+    secrets: inherit
+
+  qemu:
+    name: ③ QEMU
+    needs: [source, sysroot]
+    uses: ./.github/workflows/engine-build.yml
+    with:
+      configure_only: ${{ inputs.configure_only }}
+    secrets: inherit
+
+  ipa:
+    name: ④ IPA
+    needs: qemu
+    if: ${{ inputs.build_ipa }}
+    uses: ./.github/workflows/build-unsigned-ipa.yml
+    with:
+      engine_artifact: qemu-engine
+    secrets: inherit

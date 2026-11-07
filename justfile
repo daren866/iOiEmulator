@@ -60,7 +60,11 @@ ipa: (archive-unsigned) (package)
 fetch-engine:
     bash scripts/fetch-engine.sh
 
-# 生成 iOS 交叉编译配置（草案）
+# 全链：源码校验 → iOS 依赖 sysroot → QEMU configure → libqemu-arm.a
 [group('engine')]
-engine-config:
+engine:
     bash scripts/build-engine-ios.sh
+
+# 兼容旧名字
+[group('engine')]
+engine-config: (engine)

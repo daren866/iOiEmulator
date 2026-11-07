@@ -1,0 +1,133 @@
+name: "引擎 ③ QEMU iOS 交叉编译 (macOS arm64)"
+
+# 用 qemu-ios v0.0.13 自带的 iOS 嵌入层（contrib/ios-app/qemu-ios-ui.h、
+# qemu-ios-entry.c、hw/arm/gles-host-eagl.c）+ TCG 解释器后端，
+# 在 macOS runner 上交叉编译为 iOS arm64 静态库 libqemu-arm.a。
+#
+# 默认 configure_only=true：只跑 configure，几分钟内给出可诊断结果，
+# 不占用 6 小时 job 上限。手动触发时关掉它才会执行完整 ninja 编译。
+on:
+  workflow_call:
+    inputs:
+      configure_only:
+        description: "只做 configure 不编译"
+        type: boolean
+        required: false
+        default: true
+  workflow_dispatch:
+    inputs:
+      configure_only:
+        description: "只做 configure 不编译"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  WORK: ${{ github.workspace }}/.engine-work
+  CONFIGURE_ONLY: ${{ inputs.configure_only }}
+  IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+
+jobs:
+  qemu:
+    name: configure → (可选) ninja → libqemu-arm.a
+    runs-on: macos-15
+    timeout-minutes: 330
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 显示工具链
+        run: |
+          sw_vers
+          echo "arch      : $(uname -m)"
+          xcodebuild -version
+          echo "iphoneos  : $(xcrun --sdk iphoneos --show-sdk-version)"
+
+      - name: 安装 QEMU configure 所需工具
+        run: |
+          set -e
+          brew install --quiet meson ninja pkg-config jq python@3.11 2>&1 | tail -10 || true
+          python3 -m pip install --quiet --break-system-packages tomli 2>/dev/null || true
+          for t in meson ninja pkg-config python3 jq; do
+            command -v "$t" >/dev/null 2>&1 || { echo "::error::缺少 $t"; exit 1; }
+          done
+          meson --version
+
+      - name: 下载 ① 源码包与清单
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: engine-source
+          path: ${{ env.WORK }}
+
+      - name: 下载 ② sysroot
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ios-sysroot
+          path: ${{ env.WORK }}
+
+      - name: 解压 QEMU 源码树（单独触发本工作流时自动兜底拉取）
+        env:
+          WORK: ${{ env.WORK }}
+        run: |
+          set -e
+          mkdir -p "$WORK/tarballs" "$WORK/qemu-src"
+          if [ ! -f "$WORK/tarballs/qemu-ios-v0.0.13-source.tar.gz" ]; then
+            echo "::warning::未找到 ① 的 artifact，直接拉取锁定源码"
+            ENGINE_DEST="$WORK/tarballs" bash scripts/fetch-engine.sh
+            WORK="$WORK" ENGINE_DEST="$WORK/tarballs" bash scripts/engine-source-manifest.sh
+          fi
+          tar xzf "$WORK/tarballs/qemu-ios-v0.0.13-source.tar.gz" \
+              -C "$WORK/qemu-src" --strip-components=1
+          echo "源码文件数：$(find "$WORK/qemu-src" -type f | wc -l | tr -d ' ')"
+          test -f "$WORK/qemu-src/contrib/ios-app/qemu-ios-ui.h"
+
+      - name: 生成 iOS cross file 并执行 configure
+        id: configure
+        env:
+          WORK: ${{ env.WORK }}
+        run: bash scripts/configure-engine-ios.sh
+
+      - name: 编译 QEMU 并归档 libqemu-arm.a
+        if: ${{ steps.configure.outcome == 'success' && inputs.configure_only == false }}
+        env:
+          WORK: ${{ env.WORK }}
+          LT_JOBS: "3"
+        run: bash scripts/build-engine-lib.sh
+
+      - name: 生成引擎构建报告
+        if: always()
+        env:
+          WORK: ${{ env.WORK }}
+          CONFIGURE_ONLY: ${{ env.CONFIGURE_ONLY }}
+        run: bash scripts/engine-build-report.sh
+
+      - name: 上传引擎产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-engine
+          path: |
+            ${{ env.WORK }}/engine-out/
+            ${{ env.WORK }}/build-report.md
+            ${{ env.WORK }}/build-report.json
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 6
+
+      - name: 发布引擎产物到 Releases
+        if: ${{ steps.configure.outcome == 'success' && inputs.configure_only == false }}
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: engine-latest
+          target_commitish: ${{ github.sha }}
+          name: "qemu-ios 引擎产物 · ${{ github.sha }}"
+          prerelease: true
+          body_path: ${{ env.WORK }}/build-report.md
+          files: |
+            ${{ env.WORK }}/engine-out/*

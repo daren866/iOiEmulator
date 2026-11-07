@@ -23,15 +23,30 @@ struct ContentView: View {
     }
 }
 
+/// 引擎链接与否由 Project.swift 在生成工程时决定：
+/// 存在 engine/prebuilt/libqemu-arm.a 时定义 ENGINE_LINKED 并编入桥接源码。
+private func makeEngine() -> EmulatorEngine {
+#if ENGINE_LINKED
+    return QemuEngineBridge.shared
+#else
+    return UnavailableEngine()
+#endif
+}
+
 private struct StatusView: View {
-    private let engine: EmulatorEngine = UnavailableEngine()
+    private let engine: EmulatorEngine = makeEngine()
 
     var body: some View {
         List {
             Section(header: Text("引擎")) {
                 statusRow("状态", engine.status.label, highlight: true)
+#if ENGINE_LINKED
+                statusRow("二进制", "libqemu-arm.a 已链接")
+                statusRow("TCG 后端", "TCI 解释器（无需 JIT）")
+#else
                 statusRow("二进制", "libqemu-arm 未链接")
                 statusRow("TCG 后端", "待接入 (TCI / TCTI)")
+#endif
             }
 
             Section(header: Text("本次构建")) {
@@ -43,24 +58,42 @@ private struct StatusView: View {
             }
 
             Section(header: Text("显示表面")) {
+#if ENGINE_LINKED
+                QemuEngineHostView()
+                    .frame(height: 200)
+                    .listRowInsets(EdgeInsets())
+                Text("按屏幕刷新率轮询 qemu_ios_ui_frame()，BGRA → CGImage。")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+#else
                 EngineHostView()
                     .frame(height: 200)
                     .listRowInsets(EdgeInsets())
                 Text("移植完成后，QEMU 的 DisplaySurface 将在此视图上呈现。")
                     .font(.footnote)
                     .foregroundColor(.secondary)
+#endif
             }
 
             Section(header: Text("当前进度")) {
+#if ENGINE_LINKED
+                Text("本 IPA 已链接 qemu-ios 引擎静态库，但尚未在真机上验证启动。")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                Text("固件需自行制备；QEMU 一个进程只能启动一次，且不启用 JIT。")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+#else
                 Text("本 IPA 是「应用外壳 + 移植脚手架」，尚不包含可运行的 qemu-ios 模拟器。")
                     .font(.footnote)
                     .foregroundColor(.secondary)
-                Text("已完成：Tuist 工程、未签名 arm64 打包流水线、Release 自动发布、引擎源码锁定、Swift 抽象层。")
+                Text("已完成：Tuist 工程、macOS arm64 多 workflow 流水线、Release 自动发布、引擎源码锁定、iOS 交叉编译脚本、Swift ABI 桥接。")
                     .font(.footnote)
                     .foregroundColor(.secondary)
-                Text("未完成：QEMU 交叉编译、依赖库 iOS 化、设备模型 rebase、单进程化改造。见 docs/PORTING.md。")
+                Text("待完成：依赖 sysroot 全量编通、QEMU 交叉编译、真机验证。见 docs/PORTING.md。")
                     .font(.footnote)
                     .foregroundColor(.secondary)
+#endif
             }
         }
         .navigationTitle("iOiEmulator")
@@ -84,7 +117,7 @@ private struct StatusView: View {
 private struct BoardListView: View {
     var body: some View {
         List {
-            Section(header: Text("qemu-ios 的 8 块板子（目录数据，尚不可启动）")) {
+            Section(header: Text("qemu-ios 的 8 块板子（目录数据）")) {
                 ForEach(BoardCatalog.all) { board in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(board.device).font(.headline)
@@ -118,7 +151,7 @@ private struct GuideView: View {
             }
             Section(header: Text("JIT（可选）")) {
                 guideRow("StikDebug", "iOS 17.4–26.x，配合 get-task-allow + ptrace 打开动态代码签名；每次启动需重新挂载。")
-                guideRow("不启用 JIT", "退回 TCI / TCTI 解释器后端；项目实测约 3.3–5.2 倍减速，仍可用。")
+                guideRow("不启用 JIT", "引擎使用 TCI 解释器后端；项目实测约 3.3–5.2 倍减速，仍可用。")
             }
             Section(header: Text("注意")) {
                 guideRow("固件", "App 内不含 iOS 固件；IPSW 制备需在受控环境完成。")

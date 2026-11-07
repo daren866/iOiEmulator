@@ -1,0 +1,60 @@
+name: "引擎 ① 源码锁定与 iOS 能力清单 (macOS arm64)"
+
+# 本流水线全部阶段都显式跑在 Apple Silicon macOS runner 上。
+# QEMU 交叉编译 iOS 依赖 Xcode / xcrun / iphoneos SDK，只有 macOS runner 具备。
+on:
+  workflow_call:
+    outputs:
+      manifest_path:
+        description: "生成的源码清单路径"
+        value: ${{ jobs.source.outputs.manifest_path }}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # 所有中间产物集中到一个目录，方便跨 job / 跨 workflow 传递
+  WORK: ${{ github.workspace }}/.engine-work
+
+jobs:
+  source:
+    name: 下载 → SHA256 校验 → 生成清单
+    runs-on: macos-15
+    timeout-minutes: 30
+    outputs:
+      manifest_path: ${{ steps.manifest.outputs.path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 显示 macOS arm64 工具链
+        run: |
+          sw_vers
+          echo "arch      : $(uname -m)"
+          xcodebuild -version
+          echo "iphoneos  : $(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "sdk path  : $(xcrun --sdk iphoneos --show-sdk-path)"
+
+      - name: 拉取并校验两份锁定源码
+        env:
+          ENGINE_DEST: ${{ env.WORK }}/tarballs
+        run: bash scripts/fetch-engine.sh
+
+      - name: 解包并生成 iOS 宿主能力清单
+        id: manifest
+        env:
+          WORK: ${{ env.WORK }}
+        run: bash scripts/engine-source-manifest.sh
+
+      - name: 上传源码包与清单
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-source
+          path: |
+            ${{ env.WORK }}/tarballs/
+            ${{ env.WORK }}/manifest.json
+            ${{ env.WORK }}/qemu-ios-ui.h
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 6

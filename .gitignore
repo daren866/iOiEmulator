@@ -4,6 +4,8 @@ DerivedData/
 Derived/
 build/
 engine/vendor/
+engine/prebuilt/
+.engine-work/
 .DS_Store
 buildServer.json
 *.ipa

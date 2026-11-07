@@ -1,97 +1,65 @@
-# GitHub Actions 打包流水线
+# CI 流水线
 
-## 触发方式
+所有 workflow 都**显式运行 `runs-on: macos-15`**（Apple Silicon M1，3 核 / 7 GB / 14 GB SSD，公开仓库免费且不限时长）。`xcodebuild`、`xcrun`、`iphoneos SDK` 只有 macOS runner 提供，iOS 交叉编译无处可替。
 
-`.github/workflows/build-unsigned-ipa.yml`：
+## 多个 YAML 的分工
 
-| 事件 | 行为 |
-| --- | --- |
-| 任意分支 `push`（有新提交） | 自动构建未签名 arm64 IPA，并发布到 Releases |
-| `workflow_dispatch` | 手动触发，同上 |
-| tag 推送 | **显式忽略**（`tags-ignore: ['**']`） |
+| 文件 | 触发 | 职责 | 主要产物 |
+| --- | --- | --- | --- |
+| [`build-unsigned-ipa.yml`](../.github/workflows/build-unsigned-ipa.yml) | `push` / `workflow_dispatch` / `workflow_call` | **每次提交自动打包**未签名 arm64 IPA 并发布到 Releases | `unsigned-ipa-N` artifact + `build-N` Release |
+| [`engine-source.yml`](../.github/workflows/engine-source.yml) | `workflow_call` / `workflow_dispatch` | ① 拉取两份锁定源码、SHA256 校验、核验 iOS 嵌入层并生成清单 | `engine-source` artifact |
+| [`engine-sysroot.yml`](../.github/workflows/engine-sysroot.yml) | `workflow_call` / `workflow_dispatch` | ② 交叉编译 iOS arm64 静态依赖 | `ios-sysroot` artifact |
+| [`engine-build.yml`](../.github/workflows/engine-build.yml) | `workflow_call` / `workflow_dispatch` | ③ QEMU `configure` →（可选）`ninja` → `libqemu-arm.a` | `qemu-engine` artifact + `engine-latest` Release |
+| [`engine-pipeline.yml`](../.github/workflows/engine-pipeline.yml) | `workflow_dispatch` | 手动一键串起 ①→②→③→④ | 同上全部 |
 
-忽略 tag 是必要的：工作流自己会创建 `build-N` tag 与 Release，
-若 tag 推送也触发构建会造成无限循环。
+`engine-pipeline.yml` 用 `workflow_call` 调用前三者，被调用的 jobs 与调用者**属于同一个 run**，因此 `actions/upload-artifact@v4` / `download-artifact@v4` 直接共享产物，不需要传 `run-id`。每一步也都能在 Actions 页面单独手动触发调试。
 
-`concurrency` 按 `github.ref` 分组并取消进行中的旧构建，避免并发浪费 macOS runner。
+> 设计取舍：`push` **不会**触发引擎编译（QEMU 全量编译动辄数十分钟）。提交只跑 45–60 秒的 IPA 打包；引擎流水线按需手动跑。引擎成功后产物发到 `engine-latest` Release，之后每次自动打包都会尝试下载它并条件链接。
 
-## 流水线各阶段
+## 自动打包流程（push）
 
-1. **Checkout** — `fetch-depth: 0`，保留完整历史便于写入构建信息。
-2. **Show toolchain** — 打印 macOS / Xcode / iPhoneOS SDK 版本。
-3. **Install Tuist and ldid** — 固定版本（`TUIST_VERSION=4.215.0`）从 GitHub Release
-   直连下载官方 `tuist.zip`（内含 `tuist` 可执行文件与 `ProjectDescription.framework`），
-   解压到 `~/.tuist/bin` 并写入 `GITHUB_PATH`；同时用 `SHASUMS256.txt` 校验。
-   下载失败自动回退 `v4.gh-proxy.org` 镜像。
-   `ldid` 通过 Homebrew 安装，可选，缺失时只产出纯未签名 IPA。
+1. `Checkout` → 显示工具链（`sw_vers` / `uname -m` / `xcodebuild -version` / SDK 版本）
+2. **准备引擎链接**（`scripts/prepare-engine-link.sh`）：按「同 run artifact → `engine-latest` Release → 本地 `engine/prebuilt/`」顺序找 `libqemu-arm.a`；找不到不算错误，照常产出外壳 IPA，并把 `ENGINE_LINKED` 写进 `$GITHUB_ENV`
+3. `Install Tuist and ldid` — 固定版本 `4.215.0` 直连 GitHub Release 下载官方 `tuist.zip`，用 `SHASUMS256.txt` 校验，失败回退 gh-proxy 镜像；`ldid` 可选，缺失时只产出纯未签名 IPA
+4. `tuist generate --no-open` — `Project.swift` 按 `engine/prebuilt/libqemu-arm.a` 是否存在，条件纳入 `EngineLinked/` 桥接源码并追加 `OTHER_LDFLAGS`
+5. `xcodebuild clean archive` — `CODE_SIGNING_ALLOWED=NO` / `ARCHS=arm64` / `IPHONEOS_DEPLOYMENT_TARGET=15.0` / `SKIP_INSTALL=NO`
+6. `Verify archive binary` — `lipo -archs` 必须是 arm64，`codesign -dv` 预期未签名
+7. `Package IPA` — `scripts/package-ipa.sh`，`ldid -S` 做 ad-hoc 伪签名供 TrollStore，生成 `SHA256SUMS` 与 `build-info.txt`
+8. 上传 14 天 Artifacts 备份 + 发布 `build-N` prerelease（用自动 `GITHUB_TOKEN`，**不需要 PAT**）
 
-   > 为什么不用 `brew install tuist`：Homebrew 里**没有** `tuist` formula
-   > （会提示 "No available formula with the name tuist"）；
-   > `https://install.tuist.io` 在 CI runner 上返回 **403**。
-   > 直连 release 资源是官方安装脚本的同一来源，最稳妥。
-4. **Generate Xcode project** — `tuist generate --no-open`，断言 `.xcworkspace` 已生成。
-5. **Build unsigned arm64 archive** — 关键参数：
+自建 `build-N` tag 用 `tags-ignore: ['**']` 排除，不会造成循环触发（已实测）。
 
-   ```
-   -destination generic/platform=iOS
-   CODE_SIGNING_ALLOWED=NO
-   CODE_SIGNING_REQUIRED=NO
-   CODE_SIGN_IDENTITY=""
-   ARCHS=arm64
-   IPHONEOS_DEPLOYMENT_TARGET=15.0
-   SKIP_INSTALL=NO
-   ```
+## 引擎流水线（手动）
 
-   `SKIP_INSTALL=NO` 保证 `.app` 落在 `*.xcarchive/Products/Applications/`。
-6. **Verify archive binary** — `lipo` 确认 arm64、`file` 确认 Mach-O、`codesign -dv` 预期显示未签名。
-7. **Package IPA** — 调用 `scripts/package-ipa.sh`：`chmod +x` → 可选 `ldid -S` 伪签名 →
-   `Payload/` → `zip` → `SHA256SUMS` + `build-info.txt`。
-8. **IPA sanity check** — `unzip -t` 校验包完整、`unzip -l` 确认主二进制路径。
-9. **Upload to Actions Artifacts** — 备份，保留 14 天。
-10. **Publish IPA to Releases** — `softprops/action-gh-release@v2`。
+在 Actions → `引擎 ⋯ 全链编排` → Run workflow：
 
-## Releases 策略
+| Input | 默认 | 说明 |
+| --- | --- | --- |
+| `configure_only` | `true` | 只跑 `configure`，几分钟给可诊断结果；关掉才执行完整 `ninja` + 静态库归档 |
+| `build_ipa` | `true` | 引擎阶段结束后重新打包 IPA |
+| `packages` | `libffi,pcre2,glib,pixman,openssl,proxy-libintl` | 依赖集合 |
 
-每次成功构建发布一个 **prerelease**：
+每个阶段都会产出报告：
 
-- tag：`build-<run_number>`（单调递增，不会重复）
-- Release 名：`iOiEmulator 未签名 IPA · build #N`
-- 附件：`*.ipa`、`SHA256SUMS`、`build-info.txt`
-- Release 正文含 commit / 分支 / 文件名 / 引擎状态
+- `sysroot-report.json` — 逐包成功/失败、阶段、耗时、日志路径
+- `build-report.md` / `build-report.json` — configure 状态、依赖统计、引擎清单、失败日志末段
+- 报告同时写进 Actions Step Summary 和 `engine-latest` Release 说明
 
-`run_number` 在全仓库唯一，因此即使同一分支连续提交也不会覆盖；
-重新运行同一 run 时该 action 会更新已有 Release 而非报错。
+依赖逐包独立编译、**失败不中断**，所以即使 glib 等某包没编成，CI 仍会给出精确的失败阶段与日志，而不是整条流水线静默挂掉。
 
-`permissions: contents: write` 是发布 Release 所必需的，
-使用 GitHub 自动提供的 `secrets.GITHUB_TOKEN`，**不需要在仓库里配置任何 PAT**。
+## 移除 UTM 全家桶的原因
 
-## 关于密钥
+UTM 的 `scripts/build_dependencies.sh -p ios-tci -a arm64` 会连带编译 gstreamer / spice-gtk / ANGLE / Vulkan / MoltenVK / WebKit，并要求 `brew install llvm spirv-llvm-translator libxcb libxrandr` 等一整套 host 工具。在标准 macOS runner 的 3 核 / 14 GB 磁盘上几乎必然超时或撑爆磁盘。
 
-- CI 端只使用 `GITHUB_TOKEN`，无长期凭据。
-- 推送代码用的个人访问令牌属于本地操作，不应写入任何仓库文件、脚本或 workflow。
-- 若需要 CI 触发其他仓库，请在 Settings → Secrets 里添加，不要硬编码。
+本仓库改用 `scripts/build-ios-deps.sh`，只编 `--without-default-features` 真正探测到的库，版本与 SHA256 直接取自 qemu-ios 源码包 `contrib/portable/dependencies.json`。
 
-## 本地复现（需 macOS + Xcode）
-
-```bash
-just generate
-just archive-unsigned        # 或：bash scripts/package-ipa.sh
-```
-
-打包脚本 `scripts/package-ipa.sh` 与 CI 完全共用，可通过环境变量覆盖：
-
-```bash
-ARCHIVE_PATH=... IPA_DIR=... IPA_NAME=... bash scripts/package-ipa.sh
-```
-
-## 常见失败与排查
+## 排查
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
-| `tuist: command not found` | 不要改用 Homebrew（无此 formula）或 `install.tuist.io`（CI 上 403）；使用工作流里的固定版本 release 直连下载，并确认已写入 `GITHUB_PATH` |
-| Tuist 版本升级导致 manifest 报错 | 调整 `env.TUIST_VERSION`；`Project.swift` / `Tuist.swift` 用的是 Tuist 4.x API |
-| `未生成 xcworkspace` | `Project.swift` 语法与 Tuist 版本不匹配；`Tuist.swift` / `Tuist/Package.swift` 用的是 Tuist 4.x API |
-| `archive 中没有 .app` | 缺少 `SKIP_INSTALL=NO`，或 scheme 未共享 |
-| 二进制不是 arm64 | 检查 `ARCHS=arm64` 是否被 `ONLY_ACTIVE_ARCH` 覆盖 |
-| Release 上传 403 | 缺 `permissions: contents: write` |
-| 每次 push 触发两次构建 | 检查是否有别的 workflow 也监听了 tag 推送 |
+| `tuist: command not found` | Homebrew 无 `tuist` formula，`install.tuist.io` 在 runner 返回 403；工作流已改为固定版本直连 Release 下载 |
+| `glib-2.0.pc` 缺失 / configure 卡在 glib | ② 阶段 glib 未编成；看 `ios-sysroot` artifact 的 `status/glib.log`，iOS cross build 的 `cc.run()` 探测是最常见卡点 |
+| `ninja: command not found` / meson 报错 | ③ 的 Homebrew 安装步骤失败，看该步骤日志 |
+| `libtool` 归档报重复符号 | `build-engine-lib.sh` 把 sysroot 依赖合并进单个 `.a`，若 ninja 链接命令里已带同名库，检查 `engine-out/ENGINE_MANIFEST.json` 的 `archive_inputs` |
+| IPA 里 `engine_linked: false` | 没找到 `libqemu-arm.a`，属预期；先手动跑通引擎流水线并发布 `engine-latest` |
+| `ldid` 失败 | 降级为纯未签名 IPA，可用 AltStore / Sideloadly 重签 |

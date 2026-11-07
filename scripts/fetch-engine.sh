@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST="$ROOT/engine/vendor"
+DEST="${ENGINE_DEST:-$ROOT/engine/vendor}"
 PROXY="${GH_PROXY:-https://v4.gh-proxy.org/}"
 # 去掉末尾多余的 /，再拼原 URL
 PROXY="${PROXY%/}"

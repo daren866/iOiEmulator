@@ -81,7 +81,7 @@ min_os         : 15.0
 signing        : none (ad-hoc ldid signature may be present)
 xcode          : $XCODE_VER
 iphoneos_sdk   : $SDK_VER
-engine_linked  : no (qemu-ios port pending, see docs/PORTING.md)
+engine_linked  : ${ENGINE_LINKED:-false} (libqemu-arm.a linked when true)
 built_at       : $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 EOF
 
