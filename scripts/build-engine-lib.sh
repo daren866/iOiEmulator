@@ -27,7 +27,7 @@ ninja -C "$BUILD" -j"$JOBS" -d keeprsp qemu-system-arm
 echo
 echo "== 提取 ninja 链接输入并归档静态库 =="
 python3 - "$SRC" "$BUILD" "$PREFIX" "$OUT" <<'PY'
-import json, pathlib, shlex, subprocess, sys, hashlib
+import json, pathlib, shlex, shutil, subprocess, sys, hashlib
 
 src, build, prefix, out = map(pathlib.Path, sys.argv[1:5])
 
@@ -115,38 +115,114 @@ for a in link:
     else:
         expanded.append(a)
 
-# 3) 过滤掉可执行文件专属参数，保留 .o / .a / -l / -L / -framework
-objs, archives = [], []
+# 3) 解析链接命令：提取 QEMU 显式 .o，并把 .a 按路径分为两类：
+#      * qemu 工具库（build 目录下，如 libqemuutil.a）
+#      * sysroot 依赖库（prefix/lib 下，如 libglib-2.0.a）
+#    关键修复（此前 ④ IPA 报 ld: 2312 duplicate symbols）：
+#      旧逻辑把「显式 .o + 入口 .o + 全部 .a」平铺进同一个 libqemu-arm.a，
+#      再用 -force_load 整体拉入；这会把 QEMU 工具库里「仅按需拉取」的成员
+#      （如 pci-stub.o）强制链接，与 msi.o 等冲突。真实 qemu-system-arm 链接
+#      靠静态库的惰性解析只拉被引用的成员，因此这里改回：
+#        - libqemu-arm.a 只装「显式 .o + 入口 .o」（按 realpath 去重，内部无冲突），
+#          仍用 -force_load 整体拉入，避免单遍扫描导致的 Undefined symbols；
+#        - QEMU 工具库、sysroot 依赖库保持为独立 .a，由 App 惰性链接。
+#    另外同一 .o 可能被链接命令重复列出（@rsp 与显式并存，或 rsp 自身重复），
+#    必须按 realpath 去重，否则会出现 gstring.c.o 两份这样的重复成员。
 drop_next = False
+objs = []
+qemu_archives = []
+sysroot_archives = []
+seen_obj = set()
+prefix_lib = prefix / 'lib'
+
+
+def categorize(p: pathlib.Path):
+    try:
+        s = str(p.resolve())
+    except Exception:
+        s = str(p)
+    if s.startswith(str(build)):
+        return 'qemu'
+    if s.startswith(str(prefix_lib)):
+        return 'sysroot'
+    return None
+
+
+def resolve_lib(a: str):
+    # 把 -lfoo / -l:libfoo.a 解析为磁盘上的 .a 绝对路径（若存在）
+    if a.startswith('-l:'):
+        name = a[3:]
+    elif a.startswith('-l'):
+        name = 'lib' + a[2:] + '.a'
+    else:
+        return None
+    for base in (build, prefix_lib):
+        cand = base / name
+        if cand.exists():
+            return str(cand.resolve())
+    return None
+
+
 for a in expanded:
-    if drop_next:
-        drop_next = False; continue
     if a == '-o':
-        drop_next = True; continue
+        drop_next = True
+        continue
+    if drop_next:
+        drop_next = False
+        continue
     if a.endswith('system_main.c.o'):
         continue  # 由 qemu-ios-entry.o 取代
     if a in ('-pie', '-Wl,-pie') or a.startswith('-Wl,--dynamic-list=') or a == '-shared':
         continue
     if a.endswith('.o'):
-        objs.append(a)
+        p = pathlib.Path(a) if pathlib.Path(a).is_absolute() else (build / a)
+        if not p.exists():
+            continue
+        rp = str(p.resolve())
+        if rp in seen_obj:
+            continue
+        seen_obj.add(rp)
+        objs.append(str(p))
     elif a.endswith('.a'):
-        archives.append(a)
+        p = pathlib.Path(a) if pathlib.Path(a).is_absolute() else (build / a)
+        cat = categorize(p)
+        if cat == 'qemu':
+            qemu_archives.append(str(p.resolve()))
+        elif cat == 'sysroot':
+            sysroot_archives.append(str(p.resolve()))
+    elif a.startswith('-l'):
+        rp = resolve_lib(a)
+        if rp:
+            if rp.startswith(str(build)):
+                qemu_archives.append(rp)
+            elif rp.startswith(str(prefix_lib)):
+                sysroot_archives.append(rp)
 
-# 4) 合并 sysroot 中的依赖静态库
-deps = sorted(str(p) for p in (prefix / 'lib').glob('*.a'))
-inputs = extra_objs + objs + archives + deps
-inputs = [i if pathlib.Path(i).is_absolute() else str(build / i) for i in inputs]
-inputs = [i for i in inputs if pathlib.Path(i).is_file()]
+# 4) 组装产物
+# libqemu-arm.a = 入口 .o + 去重后的 QEMU 显式 .o（内部无冲突，可安全 -force_load）
+lib = out / 'libqemu-arm.a'
+subprocess.run(['libtool', '-static', '-o', str(lib)] + extra_objs + objs, check=True)
+print(f'  -> {lib} ({lib.stat().st_size} bytes)')
+
+# QEMU 工具库、sysroot 依赖库：保持独立 .a，平铺到 engine-out/ 供 App 惰性链接
+def copy_archives(lst):
+    n = 0
+    for a in sorted(set(lst)):
+        src = pathlib.Path(a)
+        if src.exists():
+            shutil.copy(src, out / src.name)
+            n += 1
+    return n
+
+
+n_qemu = copy_archives(qemu_archives)
+n_sysroot = copy_archives(sysroot_archives)
 
 print(f'  iOS 入口 objects : {len(extra_objs)}')
-print(f'  QEMU objects     : {len(objs)}')
-print(f'  链接 .a          : {len(archives)}')
-print(f'  sysroot .a       : {len(deps)}')
-print(f'  合计归档输入     : {len(inputs)}')
-
-lib = out / 'libqemu-arm.a'
-subprocess.run(['libtool', '-static', '-o', str(lib)] + inputs, check=True)
-print(f'  -> {lib} ({lib.stat().st_size} bytes)')
+print(f'  QEMU objects     : {len(objs)} (去重后)')
+print(f'  QEMU 工具库 .a   : {n_qemu}')
+print(f'  sysroot 依赖 .a  : {n_sysroot}')
+print(f'  libqemu-arm.a 成员: {len(objs) + len(extra_objs)}')
 
 # 5) 头文件与清单
 for h in [src / 'contrib/ios-app/qemu-ios-ui.h',
@@ -163,8 +239,13 @@ manifest = {
     'tcg': 'interpreter (no JIT required)',
     'entry': 'qemu_ios_main',
     'abi_header': 'include/qemu-ios-ui.h',
-    'archive_inputs': len(inputs),
-    'note': '静态库；链接时需 -framework CoreFoundation/OpenGLES/IOSurface/CoreMedia/Cocoa 及 -lz -liconv',
+    'qemu_objects': len(objs) + len(extra_objs),
+    'qemu_libs': n_qemu,
+    'sysroot_libs': n_sysroot,
+    'note': ('libqemu-arm.a 仅含 QEMU 显式对象 + 入口对象（已 -force_load）；'
+             'QEMU 工具库与 sysroot 依赖库为独立 .a，由 App 惰性链接'
+             '（见 engine_libflags.txt）。需 -framework CoreFoundation/OpenGLES/'
+             'IOSurface/CoreMedia 及 -lz -liconv'),
 }
 (out / 'ENGINE_MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')
 PY
@@ -177,7 +258,7 @@ test -s "$OUT/libqemu-arm.a" || { echo "ERROR: libqemu-arm.a 为空" >&2; exit 1
 
 echo
 echo "== 打包便于 Release 下载 =="
-( cd "$OUT" && tar czf qemu-engine.tar.gz libqemu-arm.a include/ ENGINE_MANIFEST.json )
+( cd "$OUT" && tar czf qemu-engine.tar.gz --exclude='SHA256SUMS' . )
 ( cd "$OUT" && shasum -a 256 libqemu-arm.a qemu-engine.tar.gz > SHA256SUMS )
 cat "$OUT/SHA256SUMS"
 echo "OK: 引擎产物已生成"

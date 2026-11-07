@@ -28,7 +28,10 @@ permissions:
   contents: write
 
 concurrency:
-  group: unsigned-ipa-${{ github.ref }}
+  # 按「分支 + 触发方式」分组：push 自动打包与 engine-pipeline 的 workflow_call
+  # 调用互不取消（二者都会在 engine/prebuilt 里接入引擎并产出 IPA）。
+  # 同方式内的多次触发仍会取消较早的，避免重复打包。
+  group: unsigned-ipa-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:

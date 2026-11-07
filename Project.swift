@@ -3,12 +3,19 @@ import Foundation
 
 // iOiEmulator — unsigned iOS arm64 app shell for the qemu-ios / LightTouch engine.
 //
-// 条件链接：scripts/prepare-engine-link.sh 在 CI 里把 ③ 产出的 libqemu-arm.a
+// 条件链接：scripts/prepare-engine-link.sh 在 CI 里把 ③ 产出的引擎静态库
 // 放到 engine/prebuilt/ 后，Tuist 才会：
 //   1) 把工程根 EngineLinked/ 下的 Swift 桥接源码纳入编译
 //   2) 定义 ENGINE_LINKED 编译条件
 //   3) 追加静态库搜索路径与系统 framework 链接参数
 // 否则只编译外壳，IPA 照常产出。这样 push 自动打包不依赖引擎编译是否成功。
+//
+// 引擎链接标志由 prepare-engine-link.sh 生成到 engine_libflags.txt：
+//   - libqemu-arm.a 用 -force_load 整体拉入（仅含 QEMU 显式对象 + 入口对象，
+//     内部无冲突，可安全 force_load）；
+//   - QEMU 工具库与 sysroot 依赖库为独立 .a，放在 -Wl,-start-group ... -Wl,-end-group
+//     里惰性链接（只拉被引用的成员，避免与 pci-stub.o 等按需成员冲突）。
+// Project.swift 读取该文件，不再硬编码。
 
 let fileManager = FileManager.default
 let projectRoot = fileManager.currentDirectoryPath
@@ -17,15 +24,20 @@ let engineLinked = fileManager.fileExists(atPath: "\(engineDir)/libqemu-arm.a")
 
 let deploymentTargets: DeploymentTargets = .iOS("15.0")
 
+// 读取 prepare-engine-link.sh 生成的引擎链接标志（force_load 核心库 + start-group 其余 .a）。
+// 若文件缺失则回退为空串，避免 Tuist 解析失败。
+let engineLibFlagsFile = "\(engineDir)/engine_libflags.txt"
+let engineLibFlags: String = {
+    guard let raw = try? String(contentsOfFile: engineLibFlagsFile, encoding: .utf8) else {
+        return ""
+    }
+    return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+}()
+
 // 写成单个字符串字面量：多段 `+` 拼接会让 Tuist 的 manifest 编译器
 // 报 "unable to type-check this expression in reasonable time"。
-// 注意：libqemu-arm.a 必须用 -force_load 整体拉入，不能用普通的 -lqemu-arm。
-// 原因：该 .a 是把「QEMU 全部 objects + 入口 objects + sysroot 依赖 .a」用
-// libtool -static 合并的单一归档；若用 -lqemu-arm，链接器单遍扫描时只会拉入
-// App 直接引用的成员（如 qemu-ios-ui.o），而它依赖的 qemu_mutex_init 等 QEMU
-// 内部符号所在成员若排在后面，单遍扫描就解析不到，最终报 "Undefined symbols"。
-// -force_load 强制拉入全部成员，再由 Xcode 的 -dead_strip 回收未用符号。
-let engineLDFlags: SettingValue = "$(inherited) -Wl,-force_load,\(engineDir)/libqemu-arm.a -lz -liconv -framework CoreFoundation -framework CoreGraphics -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework OpenGLES -framework IOSurface -framework ImageIO -framework Security -framework AudioToolbox -framework Foundation"
+// 系统 framework 与 -lz/-liconv 始终在引擎链接分支追加；引擎库标志来自文件。
+let engineLDFlags: SettingValue = "$(inherited) -L\(engineDir) \(engineLibFlags) -lz -liconv -framework CoreFoundation -framework CoreGraphics -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework OpenGLES -framework IOSurface -framework ImageIO -framework Security -framework AudioToolbox -framework Foundation"
 
 var appSettings: [String: SettingValue] = [
     "IPHONEOS_DEPLOYMENT_TARGET": "15.0",
@@ -37,8 +49,8 @@ var appSettings: [String: SettingValue] = [
 if engineLinked {
     appSettings["LIBRARY_SEARCH_PATHS"] = "$(inherited) \(engineDir)"
     appSettings["HEADER_SEARCH_PATHS"] = "$(inherited) \(engineDir)/include"
-    // libqemu-arm.a 已由 build-engine-lib.sh 把 QEMU objects 与 sysroot 依赖
-    // 全部合并进单个静态库，因此这里只需 -lqemu-arm + 系统 framework。
+    // 引擎库标志（含 -force_load 与 start-group 惰性链接）来自 engine_libflags.txt，
+    // 再追加系统 framework 与 -lz/-liconv。
     appSettings["OTHER_LDFLAGS"] = engineLDFlags
 }
 
