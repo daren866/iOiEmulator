@@ -62,20 +62,30 @@ gen_flags() {
 }
 
 # 从一个源目录接入引擎：复制全部 .a + include，生成 flags，标记 linked=true。
+# 注意：find 找到的 libqemu-arm.a 可能在子目录（如 artifact 解压后的 engine-out/），
+# 因此一律从「实际包含 libqemu-arm.a 的目录」复制，而不是 $src 顶层。
 link_engine_from() {
   local src="$1" label="$2"
   local LIB
   LIB="$(find "$src" -name 'libqemu-arm.a' -type f 2>/dev/null | head -n 1)"
   [ -n "$LIB" ] || return 1
   say "来源：$label → $LIB"
+  local SRCDIR
+  SRCDIR="$(dirname "$LIB")"
   # 复制全部静态库（核心库 + QEMU 工具库 + sysroot 依赖库）
-  cp "$src"/*.a "$PREBUILT"/ 2>/dev/null || true
+  cp "$SRCDIR"/*.a "$PREBUILT"/ 2>/dev/null || true
   # 复制头文件
   mkdir -p "$PREBUILT/include"
-  HDR_DIR="$(dirname "$LIB")"
-  [ -d "$HDR_DIR/include" ] && cp -R "$HDR_DIR/include/." "$PREBUILT/include/" 2>/dev/null || true
-  cp "$src"/include/*.h "$PREBUILT/include/" 2>/dev/null || true
-  cp "$HDR_DIR"/qemu-ios-ui.h "$PREBUILT/include/" 2>/dev/null || true
+  [ -d "$SRCDIR/include" ] && cp -R "$SRCDIR/include/." "$PREBUILT/include/" 2>/dev/null || true
+  cp "$SRCDIR"/qemu-ios-ui.h "$PREBUILT/include/" 2>/dev/null || true
+  # 关键校验：核心库必须真的复制到位。否则 engine/prebuilt/libqemu-arm.a 不存在，
+  # Project.swift 会判成外壳（编译 -DSHELL_ONLY、不挂 OTHER_LDFLAGS），而本脚本却
+  # 误报 linked=true，最终产出「未链接引擎却标注已链接」的假 IPA。复制失败则回退外壳。
+  if [ ! -f "$PREBUILT/libqemu-arm.a" ]; then
+    say "::warning::核心库未能复制到 engine/prebuilt，放弃引擎链接"
+    emit false "libqemu-arm.a-not-copied"
+    return 1
+  fi
   gen_flags "$PREBUILT"
   emit true "$label"
   echo "OK: 引擎已接入"
