@@ -28,17 +28,22 @@
 | iOS 嵌入层核验与清单 | ✅ 完成 | `scripts/engine-source-manifest.sh` |
 | 多个 macOS workflow 串联 | ✅ 完成 | `.github/workflows/*.yml`（5 个，全部 `macos-15`） |
 | 未签名 arm64 IPA 自动打包 → Releases | ✅ 已用真实 CI 跑通 | `build-unsigned-ipa.yml` |
-| iOS arm64 静态依赖交叉编译 | 🟡 **CI 实测 3/6 成功**（libffi 3.5.0 / pcre2 / pixman）；glib、proxy-libintl、openssl 待修 | `scripts/build-ios-deps.sh` |
-| QEMU `configure` / `ninja` / `libqemu-arm.a` 归档 | 🟡 CI 已真实跑到 meson setup；首个硬错误 `-Dcoroutine_backend=ucontext`（iOS 只提供 sigaltstack）已修 | `scripts/configure-engine-ios.sh`、`build-engine-lib.sh` |
+| iOS arm64 静态依赖交叉编译 | ✅ 原 5 包 **CI 实测 5/5 全编成**（11 个静态库）；本轮新增 libgpg-error 1.53 / libgcrypt 1.11.2 待验证 | `scripts/build-ios-deps.sh` |
+| QEMU `configure` | ✅ **CI 实测退出码 0**，`build.ninja` 191 个 targets，`config-meson.cross` 带 `needs_exe_wrapper = true` | `scripts/configure-engine-ios.sh` |
+| QEMU `ninja` 编译 / `libqemu-arm.a` 归档 | 🟡 CI 实测编译到 **1446/1522**，卡在 `portable-crypto.h:11 'gcrypt.h' file not found`；已按上游配方补 crypto 依赖，待验证 | `scripts/build-engine-lib.sh` |
 | Swift ↔ `qemu_ios_*` 桥接 + 真实帧显示 | ✅ 代码完成，**未经真机验证** | `EngineLinked/` |
 | helper 单进程化、音频、多点触控 | ❌ 未做 | 见下文 |
 | 真机启动 iOS guest | ❌ 未验证 | 需 macOS + 真机 + 自备固件 |
 
+## 已解决的卡点（CI 实测）
+
+1. **依赖 sysroot**：libffi 3.4.6 的裸 `.cfi_*` 汇编在 Apple 汇编器上报 invalid CFI → 升 3.5.0；glib 2.80 缺 iOS 处理 → 升 UTM 验证过的 2.83.0，并按 UTM `generate_meson_cross()` 修好 cross file（`host_machine.system = 'ios'`、host 侧 `glib-mkenums` / `glib-compile-resources`、`needs_exe_wrapper = true`、预置 `has_function_pipe2/dup3 = false`）；proxy-libintl 0.4 无 `tests` meson 选项。openssl 对 iOS 非硬依赖（`ipod_touch_pke.c` 的 `<openssl/bn.h>` 被 `#ifndef QEMU_IOS_PORTABLE_CRYPTO` 包住，`hw/arm/meson.build` 的 `dependency('libcrypto')` 只在 `host_os == 'windows'` 分支），已从默认集合移除。
+2. **QEMU configure 的两类 native 编译器报错**：cross 模式下 `target/meson.build` 无条件 `subdir()` 19 个架构，hexagon / s390x 的 `native:true` 生成器报 `No build machine compiler` → 临时源码树裁剪为仅 `subdir('arm')`；`meson.build:4837` 构建摘要的 `meson.get_compiler('c', native: true)` 在该 fork 生成的 native file 组合下报 `not specified for build machine` → 改用 host 编译器（纯摘要，不影响实际编译）。另修 `--enable-ucontext` 无效 → `-Dcoroutine_backend=sigaltstack`。**configure 现退出码 0。**
+3. **`host_os` 必须保持 `darwin`**：曾考虑把 cross file 的 `host_machine.system` 改成 `ios` 以区分 build machine，但 `hw/arm/meson.build` 的 `appleframeworks` 依赖（CoreFoundation / CoreMedia / CoreVideo / VideoToolbox）和 `meson.build` 的 `supported_oses` 检查都要求 `darwin`，故不能改，只能绕开摘要行。
+
 ## 尚未解决的问题（真实卡点）
 
-1. **glib 的 iOS cross build**：meson 在 cross 模式下执行 `cc.run()` 特性探测会失败，且需要 build-machine 侧的 `glib-mkenums` / `glib-compile-resources`。已按 UTM 的 `generate_meson_cross()` 修好 cross file：`host_machine.system = 'ios'`、显式提供 host 工具、`needs_exe_wrapper = true`、预置 `has_function_pipe2/dup3 = false`，并在 CI 装 `glib-utils`。仍需一轮 CI 验证 glib 2.80 是否还触发 `cc.run()` 检查。
-1b. **openssl 对 iOS 非必需**：`ipod_touch_pke.c` 的 `<openssl/bn.h>` 被 `#ifndef QEMU_IOS_PORTABLE_CRYPTO` 包住，`hw/arm/meson.build` 的 `dependency('libcrypto')` 只在 `host_os == 'windows'` 分支；configure 已加 `-DQEMU_IOS_PORTABLE_CRYPTO` 走 QEMU 内置 crypto。故默认依赖集不再包含 openssl，需要时可手动加回。
-1c. **CI 实测已解决的坑**：libffi 3.4.6 的裸 `.cfi_*` 汇编 → 升 3.5.0；glib 2.80 缺 iOS 处理 → 升 UTM 验证过的 2.83.0；cross 模式下 `target/meson.build` 无条件 subdir 的 hexagon/s390x `native:true` 生成器报 "No build machine compiler" → 只编 arm-softmmu 时裁剪为仅 `subdir('arm')`（补丁只作用于 CI 临时源码树）；`--enable-ucontext` 不是本 fork 的有效选项，iOS 只提供 `sigaltstack` coroutine backend；proxy-libintl 0.4 没有 `tests` meson 选项。依赖 sysroot 已实测 **5/5 全编成**（11 个静态库）。
+1. **libgcrypt 依赖（本轮修复中）**：`-DQEMU_IOS_PORTABLE_CRYPTO` 下 `include/hw/arm/portable-crypto.h` 无条件 `#include <gcrypt.h>`，并用 `gcry_mpi_*` 实现 S5L8920 PKE 的 Montgomery 模运算；上游 `contrib/portable/README.md` 也明确「pinned libgcrypt MPI for its signed Montgomery PKE」。CI 实测 `ninja` 跑到 1446/1522 时报 `'gcrypt.h' file not found`。已按 `contrib/portable/crypto-dependencies.json` 把 libgpg-error 1.53 + libgcrypt 1.11.2 加入 sysroot（`--disable-asm`、`--with-libgpg-error-prefix`、`CC_FOR_BUILD`），待 CI 验证。注意 QEMU 的 gcrypt feature 仍保持 `--disable-gcrypt`，这里只提供头文件与静态库供便携引擎直接调用。
 2. **`qemu-macos-extras.c` 的平台假设**：`make-shared.py` 会把 macOS 控件/音频实现改写后用于 Linux/Android，但里面引用了 `ui/cocoa.m` 相关符号。iOS host 需要等价的 UIKit 改写，当前 `build-engine-lib.sh` 只编译 `qemu-ios-entry.c` + `qemu-ios-ui.c`，未包含 extras。
 3. **helper 单进程化**：App 壳层依赖 usbmuxd daemon、FirmwareKit、GuestAgent 等独立进程；iOS 禁止 `fork/exec`，必须改成进程内线程 + 静态库调用。
 4. **音频与多点触控**：上游研究注明音频输出有未修 bug、麦克风完全没写，多点触控尚未实现。
@@ -47,7 +52,7 @@
 
 ## 六步路线（更新版）
 
-1. **依赖 sysroot**：`scripts/build-ios-deps.sh` 交叉编译 libffi / proxy-libintl / pcre2 / glib / pixman / openssl 为 iOS arm64 静态库 → `engine-sysroot.yml`
+1. **依赖 sysroot**：`scripts/build-ios-deps.sh` 交叉编译 libffi / proxy-libintl / pcre2 / glib / pixman / libgpg-error / libgcrypt 为 iOS arm64 静态库（openssl 可选、默认不编） → `engine-sysroot.yml`
 2. **QEMU configure**：`--cross-prefix=` 强制 cross 模式，`-Dtcg_interpreter=true`，`--with-devices-arm=portable`，`--disable-*` 去掉 iOS 不支持的 host 特性 → `scripts/configure-engine-ios.sh`
 3. **引擎归档**：ninja 编译 `qemu-system-arm`，替换 `system/main.c.o` 为 iOS 入口，把 QEMU objects + sysroot `.a` 用 `libtool -static` 合成单个 `libqemu-arm.a` → `scripts/build-engine-lib.sh`
 4. **App 链接**：`scripts/prepare-engine-link.sh` 放置产物，`Project.swift` 条件加入 `EngineLinked/` 源码、`OTHER_LDFLAGS` 与系统 framework → `build-unsigned-ipa.yml`

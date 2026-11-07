@@ -23,7 +23,7 @@ on:
         description: "依赖集合"
         type: string
         required: false
-        default: "libffi,pcre2,glib,pixman,proxy-libintl"
+        default: "libffi,pcre2,glib,pixman,proxy-libintl,libgpg-error,libgcrypt"
 
 permissions:
   contents: write

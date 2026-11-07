@@ -21,7 +21,7 @@ SRC="$WORK/deps-src"
 STATUS="$WORK/sysroot/status"
 BIN="$WORK/bin"
 JOBS="${LT_JOBS:-3}"
-PACKAGES="${PACKAGES:-libffi,pcre2,glib,pixman,proxy-libintl}"
+PACKAGES="${PACKAGES:-libffi,pcre2,glib,pixman,proxy-libintl,libgpg-error,libgcrypt}"
 MIN_IOS="${IPHONEOS_DEPLOYMENT_TARGET:-15.0}"
 
 mkdir -p "$PREFIX" "$SRC" "$STATUS" "$BIN" "$PREFIX/lib/pkgconfig"
@@ -91,6 +91,10 @@ export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
 # 不设 PKG_CONFIG_SYSROOT_DIR：.pc 里的 prefix 已是绝对路径，
 # 再加 sysroot 会得到重复的 $PREFIX$PREFIX/include 路径。
 export CFLAGS="-fPIC -O2 -D__IPHONE_OS_VERSION_MIN_REQUIRED=150000"
+# libgpg-error / libgcrypt 的 autotools 在 cross 模式下要用 build-machine
+# 编译器生成并运行 mkheader、gen-posix-lock-obj 等工具，与上游
+# contrib/portable/build-crypto-deps.py 的 CC_FOR_BUILD=/usr/bin/cc 一致。
+export CC_FOR_BUILD=/usr/bin/cc
 export CXXFLAGS="-fPIC -O2"
 export LDFLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS"
 export PATH="$BIN:$PATH"
@@ -211,6 +215,12 @@ build_one() {
         case "$name" in
           libffi) EXTRA="--disable-docs --disable-multi-os-directory" ;;
           pcre2)  EXTRA="--enable-unicode --disable-jit --disable-pcre2grep-jit --disable-pcre2grep-callout" ;;
+          libgpg-error) EXTRA="--disable-doc" ;;
+          libgcrypt)
+            # iOS 便携引擎的 PKE 只用 MPI，纯 C 实现即可；禁用 asm 避免
+            # aarch64 汇编在 iphoneos SDK 下挑错架构。必须先编 libgpg-error。
+            EXTRA="--with-libgpg-error-prefix=$PREFIX --disable-asm --disable-doc"
+            ;;
           *)      EXTRA="" ;;
         esac
         ./configure --host="$HOST_TRIPLE" --prefix="$PREFIX" \

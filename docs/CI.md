@@ -37,7 +37,7 @@
 | --- | --- | --- |
 | `configure_only` | `true` | 只跑 `configure`，几分钟给可诊断结果；关掉才执行完整 `ninja` + 静态库归档 |
 | `build_ipa` | `true` | 引擎阶段结束后重新打包 IPA |
-| `packages` | `libffi,pcre2,glib,pixman,proxy-libintl` | 依赖集合（openssl 对 iOS 非必需，见下） |
+| `packages` | `libffi,pcre2,glib,pixman,proxy-libintl,libgpg-error,libgcrypt` | 依赖集合（openssl 对 iOS 非必需；libgcrypt 是便携引擎 PKE 的硬依赖，见下） |
 
 每个阶段都会产出报告：
 
@@ -52,6 +52,8 @@
 UTM 的 `scripts/build_dependencies.sh -p ios-tci -a arm64` 会连带编译 gstreamer / spice-gtk / ANGLE / Vulkan / MoltenVK / WebKit，并要求 `brew install llvm spirv-llvm-translator libxcb libxrandr` 等一整套 host 工具。在标准 macOS runner 的 3 核 / 14 GB 磁盘上几乎必然超时或撑爆磁盘。
 
 本仓库改用 `scripts/build-ios-deps.sh`，只编 `--without-default-features` 真正探测到的库，版本与 SHA256 直接取自 qemu-ios 源码包 `contrib/portable/dependencies.json`。
+
+其中 libgpg-error 1.53 / libgcrypt 1.11.2 取自源码包的 `contrib/portable/crypto-dependencies.json`。它们是**硬依赖**：`-DQEMU_IOS_PORTABLE_CRYPTO` 会让 `include/hw/arm/portable-crypto.h` 直接 `#include <gcrypt.h>` 并用 `gcry_mpi_*` 实现 S5L8920 PKE，`--disable-gcrypt` 只关掉 QEMU 自己的 cipher feature，绕不开这个头文件。libgpg-error 1.53 自带 `lock-obj-pub.aarch64-apple-darwin.h`，正好匹配 `--host=aarch64-apple-darwin`，cross 模式无需上游的 Android lock 补丁。
 
 ## 排查
 

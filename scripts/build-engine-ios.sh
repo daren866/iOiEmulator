@@ -25,7 +25,7 @@ WORK="$WORK" ENGINE_DEST="$WORK/tarballs" bash "$ROOT/scripts/engine-source-mani
 
 echo
 echo "== ② iOS 依赖 sysroot =="
-WORK="$WORK" PACKAGES="${PACKAGES:-libffi,pcre2,glib,pixman,proxy-libintl}" \
+WORK="$WORK" PACKAGES="${PACKAGES:-libffi,pcre2,glib,pixman,proxy-libintl,libgpg-error,libgcrypt}" \
   bash "$ROOT/scripts/build-ios-deps.sh"
 WORK="$WORK" bash "$ROOT/scripts/sysroot-report.sh"
 

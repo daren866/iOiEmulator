@@ -61,7 +61,7 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
 export PATH="$BIN:$PATH"
 
-CFLAGS_IOS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -fPIC -Wno-error=deprecated-declarations -DQEMU_IOS_PORTABLE_CRYPTO"
+CFLAGS_IOS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -fPIC -Wno-error=deprecated-declarations -DQEMU_IOS_PORTABLE_CRYPTO -I$PREFIX/include"
 LDFLAGS_IOS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -L$PREFIX/lib"
 
 echo

@@ -57,11 +57,28 @@
       "build": "openssl",
       "optional": true,
       "note": "默认不编。iOS 不需要：ipod_touch_pke.c 用 #ifndef QEMU_IOS_PORTABLE_CRYPTO 包裹 <openssl/bn.h>，且 hw/arm/meson.build 的 dependency('libcrypto') 只在 host_os == windows 分支生效。configure 里已加 -DQEMU_IOS_PORTABLE_CRYPTO 走内置 crypto。要编它可显式把 openssl 加进 PACKAGES。"
+    },
+    {
+      "name": "libgpg-error",
+      "archive": "libgpg-error-1.53.tar.bz2",
+      "directory": "libgpg-error-1.53",
+      "url": "https://www.gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.53.tar.bz2",
+      "sha256": "6a0721b52027415f53abcbf63b5c37776a0f774d9126d560a3ce76c0eb42903f",
+      "build": "autotools",
+      "note": "libgcrypt 的前置依赖。版本/SHA256 取自源码包 contrib/portable/crypto-dependencies.json。1.53 自带 src/syscfg/lock-obj-pub.aarch64-apple-darwin.h，正好匹配 --host=aarch64-apple-darwin，cross 模式无需上游的 Android lock 补丁。"
+    },
+    {
+      "name": "libgcrypt",
+      "archive": "libgcrypt-1.11.2.tar.bz2",
+      "directory": "libgcrypt-1.11.2",
+      "url": "https://www.gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.11.2.tar.bz2",
+      "sha256": "6ba59dd192270e8c1d22ddb41a07d95dcdbc1f0fb02d03c4b54b235814330aac",
+      "build": "autotools",
+      "note": "iOS 便携引擎的硬依赖，不是可选项：include/hw/arm/portable-crypto.h 在 QEMU_IOS_PORTABLE_CRYPTO 下 #include <gcrypt.h> 并用 gcry_mpi_* 实现 S5L8920 PKE 的 Montgomery 模运算。--disable-asm 走纯 C MPI，--with-libgpg-error-prefix 指向本 sysroot。QEMU 的 gcrypt feature 仍保持 --disable-gcrypt，这里只提供头文件与静态库。"
     }
   ],
   "optional_not_built": [
     { "name": "ffmpeg", "reason": "hw/arm/meson.build 里 dependency('libavcodec', required: false)，缺失时走 gles-host-stub" },
-    { "name": "libgcrypt", "reason": "可 --disable-gcrypt" },
     { "name": "libslirp", "reason": "可 --disable-slirp，iOS 上用户态网络另需重构" }
   ]
 }
