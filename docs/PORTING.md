@@ -28,9 +28,9 @@
 | iOS 嵌入层核验与清单 | ✅ 完成 | `scripts/engine-source-manifest.sh` |
 | 多个 macOS workflow 串联 | ✅ 完成 | `.github/workflows/*.yml`（5 个，全部 `macos-15`） |
 | 未签名 arm64 IPA 自动打包 → Releases | ✅ 已用真实 CI 跑通 | `build-unsigned-ipa.yml` |
-| iOS arm64 静态依赖交叉编译 | ✅ 原 5 包 **CI 实测 5/5 全编成**（11 个静态库）；本轮新增 libgpg-error 1.53 / libgcrypt 1.11.2 待验证 | `scripts/build-ios-deps.sh` |
+| iOS arm64 静态依赖交叉编译 | ✅ **CI 实测 7/7 全编成**（libffi 3.5.0 / pcre2 / glib 2.83.0 / pixman / proxy-libintl / libgpg-error 1.53 / libgcrypt 1.11.2），约 13 个静态库 | `scripts/build-ios-deps.sh` |
 | QEMU `configure` | ✅ **CI 实测退出码 0**，`build.ninja` 191 个 targets，`config-meson.cross` 带 `needs_exe_wrapper = true` | `scripts/configure-engine-ios.sh` |
-| QEMU `ninja` 编译 / `libqemu-arm.a` 归档 | 🟡 CI 实测编译到 **1446/1522**，卡在 `portable-crypto.h:11 'gcrypt.h' file not found`；已按上游配方补 crypto 依赖，待验证 | `scripts/build-engine-lib.sh` |
+| QEMU `ninja` 编译 / `libqemu-arm.a` 归档 | 🟡 编译修复中：先解决 crypto 依赖（已 7/7），再把 iOS 未维护的 EAGL 渲染分支换成官方 `gles-host-stub`，等待完整编译与归档验证 | `scripts/build-engine-lib.sh`、`configure-engine-ios.sh` |
 | Swift ↔ `qemu_ios_*` 桥接 + 真实帧显示 | ✅ 代码完成，**未经真机验证** | `EngineLinked/` |
 | helper 单进程化、音频、多点触控 | ❌ 未做 | 见下文 |
 | 真机启动 iOS guest | ❌ 未验证 | 需 macOS + 真机 + 自备固件 |
@@ -43,7 +43,12 @@
 
 ## 尚未解决的问题（真实卡点）
 
-1. **libgcrypt 依赖（本轮修复中）**：`-DQEMU_IOS_PORTABLE_CRYPTO` 下 `include/hw/arm/portable-crypto.h` 无条件 `#include <gcrypt.h>`，并用 `gcry_mpi_*` 实现 S5L8920 PKE 的 Montgomery 模运算；上游 `contrib/portable/README.md` 也明确「pinned libgcrypt MPI for its signed Montgomery PKE」。CI 实测 `ninja` 跑到 1446/1522 时报 `'gcrypt.h' file not found`。已按 `contrib/portable/crypto-dependencies.json` 把 libgpg-error 1.53 + libgcrypt 1.11.2 加入 sysroot（`--disable-asm`、`--with-libgpg-error-prefix`、`CC_FOR_BUILD`），待 CI 验证。注意 QEMU 的 gcrypt feature 仍保持 `--disable-gcrypt`，这里只提供头文件与静态库供便携引擎直接调用。
+1. **libgcrypt 依赖（已解决）**：`-DQEMU_IOS_PORTABLE_CRYPTO` 下 `include/hw/arm/portable-crypto.h` 无条件 `#include <gcrypt.h>`，并用 `gcry_mpi_*` 实现 S5L8920 PKE 的 Montgomery 模运算。已按 `contrib/portable/crypto-dependencies.json` 把 libgpg-error 1.53 + libgcrypt 1.11.2 加入 sysroot。两个 autotools 包踩了三个坑，均已在 `build-ios-deps.sh` 修掉：
+   - 全局 `LDFLAGS`（含 iPhoneOS sysroot）污染 host 工具链接，`/usr/bin/cc` 编出的 `mkheader` / `gost-s-box` 在 macOS 上 `Killed: 9` → 给这两个包隔离干净的 `CFLAGS_FOR_BUILD` / `LDFLAGS_FOR_BUILD` / `CC_FOR_BUILD`；
+   - workflow 级 `IPHONEOS_DEPLOYMENT_TARGET=15.0` 被 clang driver 自动读取，导致 host 工具也被标成 iOS 平台 → 在 configure/build/install 三个阶段 `unset` 该变量及 `SDKROOT` / `MACOSX_DEPLOYMENT_TARGET` 之外的 Xcode 注入；
+   - iOS SDK 把 `getentropy` 声明藏在可用性宏下，`AC_CHECK_FUNCS` 判存在却无声明 → 给 libgcrypt 传 `ac_cv_func_getentropy=no`，走 `linux` RNG 模块（PKE 只用 MPI，不依赖 CSPRNG）。
+   - 现 **7/7 依赖全编成**。注意 QEMU 的 gcrypt feature 仍保持 `--disable-gcrypt`，这里只提供头文件与静态库供便携引擎直接调用。
+1b. **iOS EAGL 渲染后端（已绕过）**：`hw/arm/gles-host.c` 的 `TARGET_OS_IPHONE` 分支只 include ES1 头，却用了 desktop GL 常量、`glClipPlane` 等 GLES 不存在的固定管线函数、以及 ES2/ES3 API，且 `gles-host-queue.c.inc` 引用未定义的 `gles_contexts`。上游 `contrib/portable/build-engine.py` 只构建 linux / Android，这条 iOS 路径从未被 CI 编译过，`hw/arm/gles-host.stub.c` 注释也确认「The stub exports every gles_host_* symbol; guest GLES HLE probe fails cleanly」。现 `configure-engine-ios.sh` 对 CI 临时源码树的 `hw/arm/meson.build` 把 backend 选择块替换为只编官方 `gles-host-stub.c`：guest 的 GLES HLE 会干净失败并回退软件渲染。**代价：iOS 端 GPU 加速渲染（EAGL）暂不可用，画面走纯软渲染**，留作后续单独修复。
 2. **`qemu-macos-extras.c` 的平台假设**：`make-shared.py` 会把 macOS 控件/音频实现改写后用于 Linux/Android，但里面引用了 `ui/cocoa.m` 相关符号。iOS host 需要等价的 UIKit 改写，当前 `build-engine-lib.sh` 只编译 `qemu-ios-entry.c` + `qemu-ios-ui.c`，未包含 extras。
 3. **helper 单进程化**：App 壳层依赖 usbmuxd daemon、FirmwareKit、GuestAgent 等独立进程；iOS 禁止 `fork/exec`，必须改成进程内线程 + 静态库调用。
 4. **音频与多点触控**：上游研究注明音频输出有未修 bug、麦克风完全没写，多点触控尚未实现。

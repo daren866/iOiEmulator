@@ -62,7 +62,13 @@ export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
 export PATH="$BIN:$PATH"
 
 CFLAGS_IOS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -fPIC -Wno-error=deprecated-declarations -DQEMU_IOS_PORTABLE_CRYPTO -I$PREFIX/include"
-LDFLAGS_IOS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -L$PREFIX/lib"
+# 链接 libgcrypt / libgpg-error：hw/arm/ipod_touch_pke.c 通过
+# include/hw/arm/portable-crypto.h 直接调用 gcry_mpi_* 实现 S5L8920 的
+# Montgomery PKE，但 QEMU 的 gcrypt feature 被 --disable-gcrypt 关掉，meson
+# 不会为 arm target 自动追加这两个库，最终链接 qemu-system-arm-unsigned
+# / libqemu-arm.a 时会报 "Undefined symbols: gcry_mpi_*"。这里显式加入。
+# 顺序：libgcrypt 依赖 libgpg-error，故 -lgcrypt 在前、-lgpg-error 在后。
+LDFLAGS_IOS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -L$PREFIX/lib -lgcrypt -lgpg-error"
 
 echo
 echo "== iOS cross 适配补丁 =="
