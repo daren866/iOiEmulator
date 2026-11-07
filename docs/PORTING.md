@@ -30,7 +30,8 @@
 | 未签名 arm64 IPA 自动打包 → Releases | ✅ 已用真实 CI 跑通 | `build-unsigned-ipa.yml` |
 | iOS arm64 静态依赖交叉编译 | ✅ **CI 实测 7/7 全编成**（libffi 3.5.0 / pcre2 / glib 2.83.0 / pixman / proxy-libintl / libgpg-error 1.53 / libgcrypt 1.11.2），约 13 个静态库 | `scripts/build-ios-deps.sh` |
 | QEMU `configure` | ✅ **CI 实测退出码 0**，`build.ninja` 191 个 targets，`config-meson.cross` 带 `needs_exe_wrapper = true` | `scripts/configure-engine-ios.sh` |
-| QEMU `ninja` 编译 / `libqemu-arm.a` 归档 | 🟡 编译已全部通过（1518/1519 目标），最终 `qemu-system-arm-unsigned` 链接已修复（补 libgcrypt/libgpg-error）；归档阶段编译 iOS 嵌入层时卡在 `cpu-param.h` 未找到，已改 `base` 标志为 compile_commands 全集并集，待验证 | `scripts/build-engine-lib.sh`、`configure-engine-ios.sh` |
+| QEMU `ninja` 编译 / `libqemu-arm.a` 归档 | ✅ **CI 实测已产出** `libqemu-arm.a`（约 1500+ 成员），并发布到 `engine-latest` Release；归档脚本把 QEMU objects + 入口 objects + sysroot `.a` 用 `libtool -static` 合并 | `scripts/build-engine-lib.sh`、`configure-engine-ios.sh` |
+| App 侧链接引擎 → 产出 `engine_linked: true` 的 IPA | 🟡 ③ 已产出引擎库；④ IPA 链接时因静态库单遍扫描缺失 QEMU 内部符号，已改用 `-force_load` 整体拉入，待验证 | `Project.swift`、`build-unsigned-ipa.yml` |
 | Swift ↔ `qemu_ios_*` 桥接 + 真实帧显示 | ✅ 代码完成，**未经真机验证** | `EngineLinked/` |
 | helper 单进程化、音频、多点触控 | ❌ 未做 | 见下文 |
 | 真机启动 iOS guest | ❌ 未验证 | 需 macOS + 真机 + 自备固件 |
@@ -50,7 +51,8 @@
    - 现 **7/7 依赖全编成**。注意 QEMU 的 gcrypt feature 仍保持 `--disable-gcrypt`，这里只提供头文件与静态库供便携引擎直接调用。
 1b. **iOS EAGL 渲染后端（已绕过）**：`hw/arm/gles-host.c` 的 `TARGET_OS_IPHONE` 分支只 include ES1 头，却用了 desktop GL 常量、`glClipPlane` 等 GLES 不存在的固定管线函数、以及 ES2/ES3 API，且 `gles-host-queue.c.inc` 引用未定义的 `gles_contexts`。上游 `contrib/portable/build-engine.py` 只构建 linux / Android，这条 iOS 路径从未被 CI 编译过，`hw/arm/gles-host.stub.c` 注释也确认「The stub exports every gles_host_* symbol; guest GLES HLE probe fails cleanly」。现 `configure-engine-ios.sh` 对 CI 临时源码树的 `hw/arm/meson.build` 把 backend 选择块替换为只编官方 `gles-host-stub.c`：guest 的 GLES HLE 会干净失败并回退软件渲染。**代价：iOS 端 GPU 加速渲染（EAGL）暂不可用，画面走纯软渲染**，留作后续单独修复。
 1c. **最终链接缺 libgcrypt（已修）**：QEMU 因 `--disable-gcrypt` 不会把 libgcrypt 链进 `qemu-system-arm-unsigned`，但 `hw/arm/ipod_touch_pke.c` 经 `portable-crypto.h` 直接调用 `gcry_mpi_*` 实现 S5L8920 的 Montgomery PKE，导致链接报 `"Undefined symbols: gcry_mpi_*"`。已在 `configure-engine-ios.sh` 的 `LDFLAGS_IOS` 末尾补 `-lgcrypt -lgpg-error`（顺序符合依赖关系）。
-1d. **归档阶段嵌入层编译缺 target include（已修）**：`build-engine-lib.sh` 原本只复用 `system/main.c` 的编译参数来编译 `qemu-ios-entry.c` / `qemu-ios-ui.c`，但这两个文件经由 arm target 头文件间接 `#include "cpu-param.h"`，该 quote-include 需要 `-DCOMPILING_PER_TARGET` 与 `-I <src>/target/arm`，而 main.c 命令里没有。改为对整张 `compile_commands.json` 取 `-I/-iquote/-isystem/-F/-D` 的并集作为 `base`，覆盖所有 target 专属路径与宏。
+1d. **归档阶段嵌入层编译缺 target include（已修）**：`build-engine-lib.sh` 原本只复用 `system/main.c` 的编译参数来编译 `qemu-ios-entry.c` / `qemu-ios-ui.c`，但这两个文件经由 arm target 头文件间接 `#include "cpu-param.h"`，该 quote-include 需要 `-DCOMPILING_PER_TARGET` 与 `-I <src>/target/arm`，而 main.c 命令里没有。改为对整张 `compile_commands.json` 取 `-I/-iquote/-isystem/-F/-D` 的并集作为 `base`，覆盖所有 target 专属路径与宏（注意各标志必须保持原始 token 化，`-arch/-isysroot` 等复合标志由 `ios-clang` 包裹脚本自动提供，无需重复收集）。
+1e. **App 链接引擎库缺 QEMU 内部符号（已修）**：`libqemu-arm.a` 是由 `libtool -static` 把「QEMU 全部 objects + 入口 objects + sysroot 依赖 .a」合并的单一归档。④ IPA 链接最初用 `-lqemu-arm`，链接器单遍扫描只会拉入 App 直接引用的成员（如 `qemu-ios-ui.o`），而它依赖的 `qemu_mutex_init` / `qemu_mutex_lock_func` 等 QEMU 内部符号所在成员若排在后面，单遍扫描就解析不到，报 `Undefined symbols`。在 `Project.swift` 改用 `-Wl,-force_load,<engine/prebuilt>/libqemu-arm.a` 强制拉入全部成员，再由 Xcode 的 `-dead_strip` 回收未用符号。
 2. **`qemu-macos-extras.c` 的平台假设**：`make-shared.py` 会把 macOS 控件/音频实现改写后用于 Linux/Android，但里面引用了 `ui/cocoa.m` 相关符号。iOS host 需要等价的 UIKit 改写，当前 `build-engine-lib.sh` 只编译 `qemu-ios-entry.c` + `qemu-ios-ui.c`，未包含 extras。
 3. **helper 单进程化**：App 壳层依赖 usbmuxd daemon、FirmwareKit、GuestAgent 等独立进程；iOS 禁止 `fork/exec`，必须改成进程内线程 + 静态库调用。
 4. **音频与多点触控**：上游研究注明音频输出有未修 bug、麦克风完全没写，多点触控尚未实现。

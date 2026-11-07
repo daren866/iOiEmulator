@@ -83,18 +83,31 @@ for s in extra_sources:
     subprocess.run(compiler + base + ['-c', str(s), '-o', str(o)], cwd=build, check=True)
     extra_objs.append(str(o))
 
-# 2) 取 ninja 对 qemu-system-arm 的最后一条链接命令，展开 @rsp
+# 2) 取 ninja 对 qemu-system-arm 的链接命令，展开 @rsp。
+#    关键：`ninna -t commands qemu-system-arm` 会连其依赖链一起返回，而
+#    qemu-system-arm 的最后一步是「把 qemu-system-arm-unsigned 拷贝/签名成
+#    qemu-system-arm」的自定义命令（cp/codesign），若取 lines[-1] 就拿到了这条
+#    cp 命令，导致 .o / .a 全部漏收（实测：归档输入里 QEMU objects=0、链接 .a=0）。
+#    这里直接针对真正的链接目标 qemu-system-arm-unsigned，并从中挑出「含 -o 输出」
+#    的 clang 链接行，避免误用后续的 cp/codesign 命令。
 link_text = ''
-for target in ('qemu-system-arm', 'qemu-system-arm-unsigned'):
+link_line = ''
+for target in ('qemu-system-arm-unsigned', 'qemu-system-arm'):
     r = subprocess.run(['ninja', '-t', 'commands', target], cwd=build,
                        text=True, capture_output=True)
     if r.returncode == 0 and r.stdout.strip():
         link_text = r.stdout.strip()
-        break
-if not link_text:
-    raise RuntimeError('找不到 qemu-system-arm 的 ninja 链接命令')
-lines = link_text.splitlines()
-link = shlex.split(lines[-1])
+        for ln in reversed(link_text.splitlines()):
+            toks = shlex.split(ln)
+            if toks and (toks[0].endswith('clang') or toks[0].endswith('clang++')) \
+               and any(t.startswith('-o') for t in toks):
+                link_line = ln
+                break
+        if link_line:
+            break
+if not link_line:
+    raise RuntimeError('找不到 qemu-system-arm 的 clang 链接命令')
+link = shlex.split(link_line)
 expanded = []
 for a in link:
     if a.startswith('@'):
