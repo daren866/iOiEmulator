@@ -42,12 +42,15 @@ emit() {
 EOF
 }
 
-# 生成链接标志文件：force_load 核心库 + 其余 .a 用 start-group 惰性链接。
+# 生成链接标志文件：force_load 核心库 + 其余 .a 惰性链接。
+# 注意：Apple 的 ld64 不支持 GNU ld 的 -start-group/-end-group（会报
+# "unknown options"）。ld64 对静态库默认惰性搜索并会自动多遍重扫以解决
+# 归档间的循环依赖，因此只需依次列出 -l 即可（这恰好也是 ③ 修复 2312 个
+# 重复符号的关键：不 force_load 工具库，pci-stub.o 等按需成员就不被硬拉入）。
 gen_flags() {
   local dir="$1"
   {
     echo "-Wl,-force_load,$dir/libqemu-arm.a"
-    echo "-Wl,-start-group"
     for a in "$dir"/*.a; do
       [ -e "$a" ] || continue
       bn="$(basename "$a")"
@@ -55,7 +58,6 @@ gen_flags() {
       nm="${bn#lib}"; nm="${nm%.a}"
       echo "-l$nm"
     done
-    echo "-Wl,-end-group"
   } > "$dir/engine_libflags.txt"
   say "已生成 engine_libflags.txt："
   while IFS= read -r l; do say "  $l"; done < "$dir/engine_libflags.txt"
