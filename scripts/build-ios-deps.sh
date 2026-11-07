@@ -225,7 +225,9 @@ build_one() {
             EXTRA="-Dtests=disabled -Dgtk=disabled -Dlibpng=disabled -Dopenmp=disabled -Dloongson-mmi=disabled -Dmmx=disabled -Dsse2=disabled -Dssse3=disabled -Dvmx=disabled -Darm-simd=disabled -Dneon=disabled -Da64-neon=disabled"
             ;;
           proxy-libintl)
-            EXTRA="-Dtests=false"
+            # proxy-libintl 0.4 没有 tests 选项，传 -Dtests 会直接
+            # "Unknown option: tests" 导致 meson setup 失败
+            EXTRA=""
             ;;
           *) EXTRA="" ;;
         esac

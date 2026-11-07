@@ -65,6 +65,21 @@ CFLAGS_IOS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -fPIC -Wn
 LDFLAGS_IOS="-arch arm64 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -L$PREFIX/lib"
 
 echo
+echo "== iOS cross 适配补丁 =="
+# QEMU 的 target/meson.build 无条件 subdir() 所有架构，其中 target/hexagon 的
+# gen_semantics 是 native:true 的 build-machine 可执行程序。在 --cross-prefix=
+# 触发的 cross 模式下，meson 会报 "No build machine compiler" 而中止 setup。
+# 我们只构建 --target-list=arm-softmmu，hexagon 子目录完全用不到，注释掉即可。
+# 该补丁只作用于 CI 里解压出来的临时源码树，不改动仓库也不改动上游 release。
+TM="$SRC/target/meson.build"
+if grep -q "^subdir('hexagon')" "$TM"; then
+  sed -i '' "s|^subdir('hexagon')|# subdir('hexagon')  # iOS arm-softmmu cross: hexagon gen_semantics needs a build-machine compiler|" "$TM"
+  echo "  已禁用 target/hexagon（arm-softmmu 不需要）"
+else
+  echo "  target/hexagon 已禁用或源码结构变化，跳过"
+fi
+
+echo
 echo "== configure =="
 cd "$BUILD"
 set +e
