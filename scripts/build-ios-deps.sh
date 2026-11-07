@@ -158,7 +158,7 @@ clean_host_env() {
   unset IPHONEOS_DEPLOYMENT_TARGET SDKROOT \
         TVOS_DEPLOYMENT_TARGET WATCHOS_DEPLOYMENT_TARGET MACOSX_DEPLOYMENT_TARGET
   export LDFLAGS="" LDFLAGS_FOR_BUILD=""
-  export CFLAGS="-fPIC -O2" CFLAGS_FOR_BUILD="-O2"
+  export CFLAGS="-fPIC -O2 -D__IPHONE_OS_VERSION_MIN_REQUIRED=150000" CFLAGS_FOR_BUILD="-O2"
   export CPPFLAGS="" CPPFLAGS_FOR_BUILD=""
   export CXXFLAGS="-fPIC -O2"
   export CC_FOR_BUILD=/usr/bin/cc
@@ -249,7 +249,11 @@ build_one() {
           libgcrypt)
             # iOS 便携引擎的 PKE 只用 MPI，纯 C 实现即可；禁用 asm 避免
             # aarch64 汇编在 iphoneos SDK 下挑错架构。必须先编 libgpg-error。
-            EXTRA="--with-libgpg-error-prefix=$PREFIX --disable-asm --disable-doc"
+            # iOS SDK 把 getentropy 放在 sys/random.h 且受可用性宏保护，
+            # configure 的 AC_CHECK_FUNCS 会误判为可用，编 rndgetentropy.c 时报
+            # "call to undeclared function 'getentropy'"。我们只用它做 MPI，
+            # 不需要 CSPRNG，强制让 configure 走 linux (/dev/urandom) RNG 模块。
+            EXTRA="--with-libgpg-error-prefix=$PREFIX --disable-asm --disable-doc ac_cv_func_getentropy=no"
             ;;
           *)      EXTRA="" ;;
         esac
