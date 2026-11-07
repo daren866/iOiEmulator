@@ -5,12 +5,12 @@
   "packages": [
     {
       "name": "libffi",
-      "archive": "libffi-3.4.6.tar.gz",
-      "directory": "libffi-3.4.6",
-      "url": "https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz",
-      "sha256": "b0dea9df23c863a7a50e825440f3ebffabd65df1497108e5d437747843895a4e",
+      "archive": "libffi-3.5.0.tar.gz",
+      "directory": "libffi-3.5.0",
+      "url": "https://github.com/libffi/libffi/releases/download/v3.5.0/libffi-3.5.0.tar.gz",
+      "sha256": "8c72678628a5dd8782f08ad421d5a441e42c1c5c1b33e0bc211cbfcf1f3b3978",
       "build": "autotools",
-      "note": "glib 依赖；iOS 需静态编译"
+      "note": "glib 依赖。源码包锁的是 3.4.6，但其 src/aarch64/sysv.S 用裸 .cfi_* 指令，Apple 汇编器报 invalid CFI advance_loc expression；3.5.0 改用 ffi_cfi.h 宏并加了 __APPLE__ 分支（UTM 也用 3.5.0）。SHA256 实测自官方 release。"
     },
     {
       "name": "proxy-libintl",
