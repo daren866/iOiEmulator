@@ -31,21 +31,39 @@ import json, pathlib, shlex, subprocess, sys, hashlib
 
 src, build, prefix, out = map(pathlib.Path, sys.argv[1:5])
 
-# 1) 用 system/main.c 的编译命令编译 iOS 嵌入层（替换 main()）
+# 1) 用整张 compile_commands 的「并集」编译标志来编译 iOS 嵌入层。
+#    仅复用 system/main.c 的参数不够：嵌入层引用 arm target 的头文件，
+#    target_page.h 在 -DCOMPILING_PER_TARGET 下才 #include "cpu-param.h"，
+#    且该 quote-include 需要 -I <src>/target/arm 才能解析。这些标志只出现在
+#    target/arm/*.c 的编译命令里，故对全部命令取并集，保证不漏任何 include
+#    路径或 target 宏。
 ccdb = json.loads((build / 'compile_commands.json').read_text())
-entry = next(c for c in ccdb if c['file'].replace('\\', '/').endswith('system/main.c'))
-args = shlex.split(entry['command'])
-compiler = args[:1]
-base = []
-skip = False
-for a in args[1:]:
-    if skip:
-        skip = False; continue
-    if a in ('-o', '-MF', '-MQ', '-MT'):
-        skip = True; continue
-    if a in ('-c', '-MD', '-MMD') or a.endswith('system/main.c'):
-        continue
-    base.append(a)
+
+compiler = None
+includes, frameworks, defines = set(), set(), set()
+keep = {'-arch', '-isysroot', '-miphoneos-version-min', '-fPIC', '-fno-pic',
+        '-mno-outline-atomics', '-Wno-error=deprecated-declarations'}
+for c in ccdb:
+    args = shlex.split(c['command'])
+    if compiler is None and args:
+        compiler = args[:1]
+    in_inc = False
+    for a in args:
+        if in_inc:
+            includes.add(a); in_inc = False; continue
+        if a in ('-I', '-iquote', '-isystem', '-idirafter'):
+            in_inc = True; continue
+        if a == '-F':
+            in_inc = True; continue
+        if a.startswith('-I') or a.startswith('-iquote') or a.startswith('-isystem') \
+           or a.startswith('-idirafter') or a.startswith('-F'):
+            (frameworks if a.startswith('-F') else includes).add(a)
+        elif a.startswith('-D'):
+            defines.add(a)
+        elif a in keep:
+            defines.add(a)
+
+base = sorted(includes) + sorted(frameworks) + sorted(defines)
 base += ['-fPIC', '-I' + str(src / 'contrib/ios-app'),
          '-I' + str(src / 'contrib/macos-app'),
          '-iquote', str(build), '-iquote', str(src)]
