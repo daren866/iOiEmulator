@@ -78,7 +78,7 @@ link_firmware_kit() {
       break
     fi
   done
-  if [ -z "$found" ] && command -v gh >/dev/null 2>&1 && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+  if [ -z "${found:-}" ] && command -v gh >/dev/null 2>&1 && [ -n "${GITHUB_REPOSITORY:-}" ]; then
     local TMP
     TMP="$(mktemp -d)"
     if gh release download firmware-kit-latest --repo "$GITHUB_REPOSITORY" \
@@ -91,14 +91,19 @@ link_firmware_kit() {
     fi
     rm -rf "$TMP"
   fi
-  if [ -z "$found" ] && [ -f "$PREBUILT/libltfw.a" ]; then
+  if [ -z "${found:-}" ] && [ -f "$PREBUILT/libltfw.a" ]; then
     found="local"
   fi
-  if [ -n "$found" ]; then
-    say "固件制备库 libltfw.a 已接入（$found）"
+  # 注意：用 ${found:-} 而非 $found —— macOS 自带 /bin/bash 是 bash 3.2，对多字节
+  # 字符支持弱；若变量名在解析时混入无效字节导致「未绑定」，:- 默认空值可兜底，
+  # 避免 set -u 下整段脚本崩溃（固件库缺失本就应按降级处理，而非中断 IPA 构建）。
+  local msg
+  if [ -n "${found:-}" ]; then
+    msg="固件制备库 libltfw.a 已接入，来源： ${found}"
   else
-    say "::warning::未找到 libltfw.a，IPA 将不含固件导入功能"
+    msg="::warning::未找到 libltfw.a，IPA 将不含固件导入功能"
   fi
+  say "$msg"
 }
 
 # 从一个源目录接入引擎：复制全部 .a + include，生成 flags，标记 linked=true。

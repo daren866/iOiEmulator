@@ -34,7 +34,8 @@ jobs:
       - name: 强制刷新工作树到目标提交
         run: |
           git fetch --force origin "${{ github.sha }}"
-          git checkout --force "${{ github.sha }}" -- .
+          git reset --hard "${{ github.sha }}"
+          git clean -fdxq
 
       - name: 显示 macOS arm64 工具链
         run: |
