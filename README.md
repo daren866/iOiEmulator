@@ -31,7 +31,8 @@
 | `engine-source.yml` | 手动 / 被调用 | ① 源码 SHA256 校验 + iOS 能力清单 |
 | `engine-sysroot.yml` | 手动 / 被调用 | ② iOS arm64 静态依赖交叉编译 |
 | `engine-build.yml` | 手动 / 被调用 | ③ QEMU `configure` → `libqemu-arm.a` |
-| `engine-pipeline.yml` | 手动 | 一键 ①→②→③→④ |
+| `firmware-kit.yml` | 手动 / 被调用 | ⑤ firmwarekit（Rust，IPSW→设备制备）→ `libltfw.a` |
+| `engine-pipeline.yml` | 手动 | 一键 ①→②→③→⑤→④ |
 
 全部显式 `runs-on: macos-15`。`push` 只跑约 1 分钟的打包，不触发耗时的 QEMU 编译；引擎成功后产物发到 `engine-latest` Release，之后每次自动打包都会尝试下载并条件链接。完整说明见 [`docs/CI.md`](docs/CI.md)。
 
@@ -45,7 +46,7 @@ Releases 里的 `iOiEmulator_unsigned_arm64_*.ipa`：
 - **AltStore / SideStore / Sideloadly**：用自己的证书重签后安装（免费证书 7 天）
 - **JIT（可选）**：StikDebug 可在 iOS 17.4–26.x 重挂 JIT；不启用则走 TCI 解释器，上游实测约 3.3–5.2× 减速
 
-固件需自行从 Apple IPSW 制备并通过 Files App 导入。
+固件在 App 内完成：`固件` tab 从内置目录清单（仅 URL/SHA1 元数据）下载或从文件 App 导入你自备的 IPSW，进程内 firmwarekit（LightTouch 的 Rust 制备器，交叉编译为 `libltfw.a`）解密 IPSW 并产出设备目录；另需按机型导入对应 SecureROM（bootrom）镜像。本仓库、CI 与 IPA 均不含任何 Apple 固件、IPSW 或解密后的固件内容。
 
 ## 本地构建（需 macOS + Xcode）
 

@@ -63,6 +63,44 @@ gen_flags() {
   while IFS= read -r l; do say "  $l"; done < "$dir/engine_libflags.txt"
 }
 
+# 引擎接好后，尽量把固件制备库 libltfw.a（firmwarekit wrapper）也带上。
+# 来源顺序：同 run artifact（下载到 ENGINE_ARTIFACT_DIR/firmware-kit）→
+# firmware-kit-latest Release → 本地已有。找不到不报错（制备功能随库缺失降级）。
+link_firmware_kit() {
+  local found=""
+  local dirs=("$CANDIDATE/firmware-kit" "$CANDIDATE")
+  for d in "${dirs[@]}"; do
+    if [ -f "$d/libltfw.a" ]; then
+      cp "$d/libltfw.a" "$PREBUILT/" 2>/dev/null || true
+      mkdir -p "$PREBUILT/include"
+      cp "$d/ltfw.h" "$PREBUILT/include/" 2>/dev/null || true
+      found="artifact"
+      break
+    fi
+  done
+  if [ -z "$found" ] && command -v gh >/dev/null 2>&1 && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+    local TMP
+    TMP="$(mktemp -d)"
+    if gh release download firmware-kit-latest --repo "$GITHUB_REPOSITORY" \
+         --pattern 'libltfw.a' --pattern 'ltfw.h' --dir "$TMP" --clobber >/dev/null 2>&1 \
+         && [ -f "$TMP/libltfw.a" ]; then
+      cp "$TMP/libltfw.a" "$PREBUILT/" 2>/dev/null || true
+      mkdir -p "$PREBUILT/include"
+      cp "$TMP/ltfw.h" "$PREBUILT/include/" 2>/dev/null || true
+      found="release"
+    fi
+    rm -rf "$TMP"
+  fi
+  if [ -z "$found" ] && [ -f "$PREBUILT/libltfw.a" ]; then
+    found="local"
+  fi
+  if [ -n "$found" ]; then
+    say "固件制备库 libltfw.a 已接入（$found）"
+  else
+    say "::warning::未找到 libltfw.a，IPA 将不含固件导入功能"
+  fi
+}
+
 # 从一个源目录接入引擎：复制全部 .a + include，生成 flags，标记 linked=true。
 # 注意：find 找到的 libqemu-arm.a 可能在子目录（如 artifact 解压后的 engine-out/），
 # 因此一律从「实际包含 libqemu-arm.a 的目录」复制，而不是 $src 顶层。
@@ -88,6 +126,7 @@ link_engine_from() {
     emit false "libqemu-arm.a-not-copied"
     return 1
   fi
+  link_firmware_kit
   gen_flags "$PREBUILT"
   emit true "$label"
   echo "OK: 引擎已接入"

@@ -28,7 +28,9 @@ protocol EmulatorEngine: AnyObject {
     var status: EngineStatus { get }
     var frameWidth: Int { get }
     var frameHeight: Int { get }
-    func start(machine: String, nandPath: String) throws
+    /// machineOptions 形如 "iPod-Touch-1G,bootrom=…,iboot=…,nand=…,nand-overlay=…"，
+    /// 作为单个 `-M` 参数传入（引擎硬性要求这些机器选项）。
+    func start(machineOptions: String) throws
     func stop()
     func sendTouch(x: Double, y: Double, phase: GuestTouchPhase)
     func restoreSnapshot(at path: String) throws
@@ -40,7 +42,7 @@ final class UnavailableEngine: EmulatorEngine {
     let frameWidth: Int = 0
     let frameHeight: Int = 0
 
-    func start(machine: String, nandPath: String) throws {
+    func start(machineOptions: String) throws {
         throw EngineError.notLinked
     }
 

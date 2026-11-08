@@ -16,10 +16,20 @@ on:
         type: string
         required: false
         default: ""
+      firmware_artifact:
+        description: "同 run 内固件制备库 artifact 名（留空则尝试 firmware-kit-latest Release）"
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
     inputs:
       engine_artifact:
         description: "引擎产物 artifact 名（留空则尝试 engine-latest Release）"
+        type: string
+        required: false
+        default: ""
+      firmware_artifact:
+        description: "固件制备库 artifact 名（留空则尝试 firmware-kit-latest Release）"
         type: string
         required: false
         default: ""
@@ -71,6 +81,14 @@ jobs:
         with:
           name: ${{ inputs.engine_artifact }}
           path: ${{ env.ENGINE_ARTIFACT_DIR }}
+
+      - name: 下载同 run 的固件制备库（可选）
+        if: ${{ github.event_name != 'push' && inputs.firmware_artifact != '' }}
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ${{ inputs.firmware_artifact }}
+          path: ${{ env.ENGINE_ARTIFACT_DIR }}/firmware-kit
 
       - name: 准备引擎链接（缺失则照常产出外壳 IPA）
         id: engine

@@ -54,9 +54,9 @@
 1d. **归档阶段嵌入层编译缺 target include（已修）**：`build-engine-lib.sh` 原本只复用 `system/main.c` 的编译参数来编译 `qemu-ios-entry.c` / `qemu-ios-ui.c`，但这两个文件经由 arm target 头文件间接 `#include "cpu-param.h"`，该 quote-include 需要 `-DCOMPILING_PER_TARGET` 与 `-I <src>/target/arm`，而 main.c 命令里没有。改为对整张 `compile_commands.json` 取 `-I/-iquote/-isystem/-F/-D` 的并集作为 `base`，覆盖所有 target 专属路径与宏（注意各标志必须保持原始 token 化，`-arch/-isysroot` 等复合标志由 `ios-clang` 包裹脚本自动提供，无需重复收集）。
 1e. **App 链接引擎库缺 QEMU 内部符号（已修）**：`libqemu-arm.a` 是由 `libtool -static` 把「QEMU 全部 objects + 入口 objects + sysroot 依赖 .a」合并的单一归档。④ IPA 链接最初用 `-lqemu-arm`，链接器单遍扫描只会拉入 App 直接引用的成员（如 `qemu-ios-ui.o`），而它依赖的 `qemu_mutex_init` / `qemu_mutex_lock_func` 等 QEMU 内部符号所在成员若排在后面，单遍扫描就解析不到，报 `Undefined symbols`。在 `Project.swift` 改用 `-Wl,-force_load,<engine/prebuilt>/libqemu-arm.a` 强制拉入全部成员，再由 Xcode 的 `-dead_strip` 回收未用符号。
 2. **`qemu-macos-extras.c` 的平台假设**：`make-shared.py` 会把 macOS 控件/音频实现改写后用于 Linux/Android，但里面引用了 `ui/cocoa.m` 相关符号。iOS host 需要等价的 UIKit 改写，当前 `build-engine-lib.sh` 只编译 `qemu-ios-entry.c` + `qemu-ios-ui.c`，未包含 extras。
-3. **helper 单进程化**：App 壳层依赖 usbmuxd daemon、FirmwareKit、GuestAgent 等独立进程；iOS 禁止 `fork/exec`，必须改成进程内线程 + 静态库调用。
+3. **helper 单进程化**：App 壳层依赖 usbmuxd daemon、GuestAgent 等独立进程；iOS 禁止 `fork/exec`，必须改成进程内线程 + 静态库调用。FirmwareKit 已按此路线完成（进程内 `libltfw.a`），GuestAgent / usbmux 待做。
 4. **音频与多点触控**：上游研究注明音频输出有未修 bug、麦克风完全没写，多点触控尚未实现。
-5. **固件制备**：IPSW 解密、NAND 镜像制备不能放进 CI / 仓库，需使用者在受控环境完成，通过 Files App 导入。引擎可用 `migrate file:` 快照跳过约 2 分 50 秒的开机。
+5. **固件制备（已接通 Rust 固件制备器）**：`固件` tab 从内置目录清单（仅 URL/SHA1 元数据）下载或导入自备 IPSW → 进程内 firmwarekit（LightTouch `crates/lighttouch-firmware`，Rust，交叉编为 `libltfw.a`，wrapper 见 `firmware-kit/src/lib.rs` 的 `ltfw_create` C ABI）解密 IPSW 并产出设备目录 → 另导入机型 SecureROM（bootrom）→ `-M <machine>,bootrom=…,iboot=…,nand=…,nand-overlay=…` 启动（引擎的 n45/m68 机器硬性要求这些机器选项，不是 `-drive`）。IPSW 解密与制备全在用户设备上完成，不进 CI / 仓库。引擎可用 `migrate file:` 快照跳过约 2 分 50 秒的开机。
 6. **JIT**：普通 iOS App 拿不到可写可执行内存。当前流水线固定用 `--enable-tcg-interpreter`（TCI），上游实测约 3.3–5.2× 减速；侧载后可用 StikDebug 重挂 JIT，但不是 CI 能覆盖的。
 
 ## 六步路线（更新版）

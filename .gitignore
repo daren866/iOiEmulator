@@ -9,3 +9,5 @@ engine/prebuilt/
 .DS_Store
 buildServer.json
 *.ipa
+firmware-kit/vendor/
+firmware-kit/target/

@@ -15,11 +15,34 @@ struct ContentView: View {
                 .tabItem { Label("设备", systemImage: "list.bullet") }
                 .tag(1)
 
+            NavigationView { FirmwareTab() }
+                .navigationViewStyle(.stack)
+                .tabItem { Label("固件", systemImage: "shippingbox") }
+                .tag(2)
+
             NavigationView { GuideView() }
                 .navigationViewStyle(.stack)
                 .tabItem { Label("侧载", systemImage: "questionmark.circle") }
-                .tag(2)
+                .tag(3)
         }
+    }
+}
+
+/// 链接引擎的 IPA 显示固件 tab（下载/导入 IPSW → 进程内 firmwarekit 制备 → 启动）；
+/// 外壳 IPA 显示占位说明。固件本身始终由使用者提供。
+private struct FirmwareTab: View {
+    var body: some View {
+#if ENGINE_LINKED
+        FirmwareView()
+#else
+        List {
+            Section {
+                Text("本 IPA 是应用外壳（未链接引擎），固件导入与制备功能需要链接 libqemu-arm.a 与 libltfw.a 的构建。")
+                    .font(.footnote).foregroundColor(.secondary)
+            }
+        }
+        .navigationTitle("固件")
+#endif
     }
 }
 

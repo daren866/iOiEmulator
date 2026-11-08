@@ -74,7 +74,7 @@ let project = Project(
             deploymentTargets: deploymentTargets,
             infoPlist: .file(path: "iOiEmulator/Info.plist"),
             sources: appSources,
-            resources: ["iOiEmulator/Assets.xcassets"]
+            resources: ["iOiEmulator/Assets.xcassets", "iOiEmulator/firmware-catalog.json"]
         )
     ]
 )

@@ -31,6 +31,11 @@ sha256_check() {
 
 fetch() {
   local name="$1" expected="$2"
+  # FETCH_ONLY="LightTouch"：只拉取文件名含该子串的包（firmware-kit 只需要 App
+  # 源码，不必下载 55MB 的引擎源码；留空则拉全部）。
+  if [ -n "${FETCH_ONLY:-}" ] && [[ "$name" != *"${FETCH_ONLY}"* ]]; then
+    return 0
+  fi
   local target="$DEST/$name"
   if [ -f "$target" ] && sha256_check "$target" "$expected" >/dev/null 2>&1; then
     echo "== $name 已存在且校验通过，跳过下载"

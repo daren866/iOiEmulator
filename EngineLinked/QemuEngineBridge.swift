@@ -84,7 +84,7 @@ final class QemuEngineBridge: EmulatorEngine, @unchecked Sendable {
         _status = .notLinked
     }
 
-    func start(machine: String, nandPath: String) throws {
+    func start(machineOptions: String) throws {
         lock.lock()
         if launched {
             lock.unlock()
@@ -96,13 +96,15 @@ final class QemuEngineBridge: EmulatorEngine, @unchecked Sendable {
 
         // qemu_ios_main 会占用调用线程直到 VM 停止，必须放在后台线程。
         // App 主线程留给 UIKit / SwiftUI。
-        let args = QemuEngineBridge.makeArguments(machine: machine, nandPath: nandPath,
+        let args = QemuEngineBridge.makeArguments(machineOptions: machineOptions,
                                                   snapshot: pendingSnapshot)
         DispatchQueue.global(qos: .userInitiated).async {
             let rc = c_qemu_ios_main(Int32(args.count), QemuEngineBridge.cArgv(args))
             DispatchQueue.main.async {
                 self.lock.lock()
-                self._status = rc == 0 ? .running(machine: machine) : .failed("qemu_ios_main rc=\(rc)")
+                self._status = rc == 0
+                    ? .running(machine: machineOptions.split(separator: ",").first.map(String.init) ?? machineOptions)
+                    : .failed("qemu_ios_main rc=\(rc)")
                 self.lock.unlock()
             }
         }
@@ -145,17 +147,21 @@ final class QemuEngineBridge: EmulatorEngine, @unchecked Sendable {
 
     // MARK: - 参数构造
 
-    /// QEMU 命令行。固件/NAND 路径由使用者通过 Files App 导入，仓库与 IPA 均不含固件。
-    static func makeArguments(machine: String, nandPath: String, snapshot: String?) -> [String] {
+    /// QEMU 命令行。固件由使用者通过固件 tab 导入/制备，仓库与 IPA 均不含固件。
+    ///
+    /// 引擎的 iPod-Touch-1G / iPhone-2G（n45/m68）机器硬性要求机器选项
+    /// bootrom= / iboot= / nand= / nand-overlay=（见 hw/arm/ipod_touch_1g.c 的
+    /// n45_stage: "the bootrom= machine option is required"）——它们跟在
+    /// `-M` 的机器名后面，而不是 -drive。
+    ///   -m 128 与引擎 N45_RAM_SIZE(0x08000000) 一致；-display none：显示走
+    ///   qemu_ios_ui_frame() 轮询而非 QEMU 显示后端。
+    static func makeArguments(machineOptions: String, snapshot: String?) -> [String] {
         var a = ["iOiEmulator",
-                 "-M", machine,
+                 "-M", machineOptions,
                  "-display", "none",
                  "-m", "128",
                  "-snapshot",
                  "-rtc", "base=localtime"]
-        if !nandPath.isEmpty {
-            a += ["-drive", "file=\(nandPath),format=raw,if=none,id=nand"]
-        }
         if let snapshot = snapshot {
             a += ["-incoming", "file:\(snapshot)"]
         }

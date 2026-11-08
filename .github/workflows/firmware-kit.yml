@@ -1,0 +1,70 @@
+name: "固件制备 firmwarekit → iOS arm64 静态库 (macOS arm64)"
+
+# LightTouch 的 firmwarekit（crates/lighttouch-firmware，Rust）：把自备的 Apple IPSW
+# 制备成设备目录（bootrom/iBoot/NAND store…）。上游桌面 / Android 以独立程序运行；
+# iOS 普通 App 不能 fork/exec 捆绑可执行文件，因此以 staticlib 链进 App：
+#   firmware-kit/src/lib.rs  —— C ABI wrapper（ltfw_create / ltfw_abi_version）
+#   scripts/build-firmware-kit.sh —— rustup + aarch64-apple-ios 交叉编译
+# 产物 libltfw.a 发布到 firmware-kit-latest Release，④ 打包时随引擎一并链接。
+# 源码来自 engine/SOURCES.json 锁定的 tarball（SHA256 校验）；仓库与 CI 不含 Apple 固件。
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  WORK: ${{ github.workspace }}/.engine-work
+
+jobs:
+  firmware-kit:
+    name: firmwarekit → libltfw.a
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 显示工具链
+        run: |
+          sw_vers
+          echo "arch      : $(uname -m)"
+          xcodebuild -version
+
+      - name: 构建固件制备静态库
+        run: bash scripts/build-firmware-kit.sh
+
+      - name: 上传固件制备产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-kit
+          path: |
+            ${{ github.workspace }}/engine/prebuilt/libltfw.a
+            ${{ github.workspace }}/engine/prebuilt/include/ltfw.h
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 6
+
+      - name: 发布固件制备产物到 Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: firmware-kit-latest
+          target_commitish: ${{ github.sha }}
+          name: "firmwarekit iOS 静态库 · ${{ github.sha }}"
+          prerelease: true
+          body: |
+            ### firmwarekit（IPSW → 设备制备）iOS arm64 静态库
+
+            | 项 | 值 |
+            | --- | --- |
+            | Commit | `${{ github.sha }}` |
+            | 源码 | `engine/SOURCES.json` 锁定的 LightTouch v0.0.13（SHA256 校验） |
+            | 目标 | `aarch64-apple-ios`，min iOS 15.0 |
+            | ABI | `ltfw_abi_version` / `ltfw_create`（见 `firmware-kit/ltfw.h`） |
+
+            > 本仓库与 CI 不含 Apple 固件；制备时 IPSW 由使用者自行提供。
+          files: |
+            ${{ github.workspace }}/engine/prebuilt/libltfw.a
+            ${{ github.workspace }}/engine/prebuilt/include/ltfw.h

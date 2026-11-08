@@ -49,11 +49,18 @@ jobs:
       configure_only: ${{ inputs.configure_only }}
     secrets: inherit
 
+  firmware-kit:
+    name: ⑤ 固件制备库
+    needs: source
+    uses: ./.github/workflows/firmware-kit.yml
+    secrets: inherit
+
   ipa:
     name: ④ IPA
-    needs: qemu
+    needs: [qemu, firmware-kit]
     if: ${{ inputs.build_ipa }}
     uses: ./.github/workflows/build-unsigned-ipa.yml
     with:
       engine_artifact: qemu-engine
+      firmware_artifact: firmware-kit
     secrets: inherit

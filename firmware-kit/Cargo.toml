@@ -1,0 +1,18 @@
+[package]
+name = "ltfw"
+description = "iOS wrapper around firmwarekit create (LightTouch's IPSW preparer) exposed as a small C ABI for iOiEmulator"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+
+[lib]
+name = "ltfw"
+crate-type = ["staticlib"]
+
+[dependencies]
+# 源码在构建时由 scripts/build-firmware-kit.sh 解包锁定 tarball 到 vendor/LightTouch（见 engine/SOURCES.json）。
+# lighttouch-firmware 属于 vendor/LightTouch 的工作区，cargo 会经由它自己的根 Cargo.toml 解析工作区字段与依赖。
+lighttouch-firmware = { path = "vendor/LightTouch/crates/lighttouch-firmware" }
+
+[profile.release]
+panic = "unwind"   # catch_unwind 兜底依赖 unwind
