@@ -30,6 +30,9 @@ if [ ! -d "$SRC/crates/lighttouch-firmware" ]; then
   tar xzf "$VENDOR/LightTouch-v0.0.13-source.tar.gz" -C "$VENDOR"
 fi
 test -f "$SRC/crates/lighttouch-firmware/Cargo.toml"
+# Cargo.toml 的 path 依赖固定指向 vendor/LightTouch；tarball 解包目录带版本号，
+# 用符号链接统一（gitignore 已排除 vendor/）。
+ln -sfn "LightTouch-v0.0.13" "$VENDOR/LightTouch"
 
 echo "== 2) iOS arm64 交叉编译环境"
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
