@@ -42,8 +42,19 @@ fetch() {
     return 0
   fi
   echo "== 下载 $name"
-  curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
-    -o "$target" "${PROXY}/${BASE}/${name}"
+  local url="${BASE}/${name}"
+  # GitHub runner 直连 github.com 最稳（镜像偶发 500）；本地网络不通直连时
+  # 才走镜像（可用 FORCE_PROXY=1 强制）。
+  if [ -n "${FORCE_PROXY:-}" ] || \
+     ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
+       -o "$target" "$url" 2>/dev/null; then
+    if [ -z "${FORCE_PROXY:-}" ]; then
+      echo "   直连失败，改走镜像 $PROXY"
+    fi
+    rm -f "$target"
+    curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
+      -o "$target" "${PROXY}/${url}"
+  fi
   sha256_check "$target" "$expected"
 }
 
