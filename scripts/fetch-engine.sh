@@ -42,18 +42,41 @@ fetch() {
     return 0
   fi
   echo "== 下载 $name"
-  local url="${BASE}/${name}"
-  # GitHub runner 直连 github.com 最稳（镜像偶发 500）；本地网络不通直连时
-  # 才走镜像（可用 FORCE_PROXY=1 强制）。
-  if [ -n "${FORCE_PROXY:-}" ] || \
-     ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
-       -o "$target" "$url" 2>/dev/null; then
-    if [ -z "${FORCE_PROXY:-}" ]; then
-      echo "   直连失败，改走镜像 $PROXY"
-    fi
+
+  # 三种下载路径，任一成功即可：
+  #   1) gh release download —— 走 API 认证直连，对大文件最稳（优先）
+  #   2) curl 直连 github.com —— runner 本地网络通常最稳
+  #   3) curl 走 gh-proxy 镜像 —— 仅本地直连不通时回退（镜像偶发 500）
+  # FORCE_PROXY=1 时跳过前两种，直接走镜像（本地网络环境调试用）。
+  download_via_gh() {
+    [ -n "${FORCE_PROXY:-}" ] && return 1
+    command -v gh >/dev/null 2>&1 || return 1
+    echo "   尝试 gh release download（API 认证直连）"
+    gh release download v0.0.13 --repo blake-lucas/LightTouch \
+      --pattern "$name" --dir "$DEST" --clobber >/dev/null 2>&1 \
+      && [ -f "$target" ]
+  }
+  download_via_curl_direct() {
+    [ -n "${FORCE_PROXY:-}" ] && return 1
+    echo "   尝试 curl 直连 github.com"
+    curl -fL --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 900 \
+      -o "$target" "${BASE}/${name}"
+  }
+  download_via_proxy() {
+    echo "   尝试镜像 $PROXY"
+    curl -fL --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 900 \
+      -o "$target" "${PROXY}/${BASE}/${name}"
+  }
+
+  local ok=0
+  if download_via_gh; then ok=1
+  elif download_via_curl_direct; then ok=1
+  elif download_via_proxy; then ok=1
+  fi
+  if [ "$ok" -ne 1 ] || [ ! -f "$target" ]; then
+    echo "ERROR: 所有下载方式均失败: $name" >&2
     rm -f "$target"
-    curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
-      -o "$target" "${PROXY}/${url}"
+    return 1
   fi
   sha256_check "$target" "$expected"
 }
