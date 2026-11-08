@@ -23,7 +23,13 @@
 #   tar 静默失败、最终退化成外壳 IPA。
 #   本版改用：多镜像回退（gh-proxy 等）+ --retry-all-errors + 期望大小校验 +
 #   错误页识别（<1KB 即视为失败）+ 全程可见日志。任一源成功即视为成功。
-set -uo pipefail
+#
+# 注意：本脚本「故意不用 set -u」。macOS 自带 /bin/bash 是 bash 3.2，对
+#「local var」声明但未赋值、以及含非 ASCII 字符的变量名处理有缺陷，配合
+# set -u 会误报 “xxx: unbound variable” 并中断整个 IPA 构建（这正是此前
+# “found: unbound variable” 反复出现的根因）。本脚本的设计意图是「引擎缺失
+# 就降级成外壳 IPA」而非崩溃，因此用 set -o pipefail 即可，不开 set -u。
+set -o pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PREBUILT="$ROOT/engine/prebuilt"
@@ -102,7 +108,7 @@ dl_file() {
   local expect="$1" out="$2" url="$3"
   local tmp="$out.part"
   rm -f "$tmp"
-  local u
+  local u=""
   while IFS= read -r u; do
     [ -n "$u" ] || continue
     say "    ↳ $u"
@@ -154,7 +160,7 @@ for a in d.get('assets', []):
         print(a['name'] + '\t' + str(a.get('size', 0)) + '\t' + a['browser_download_url'])
 " "$@" > "$manifest" 2>/dev/null || { rm -f "$manifest"; return 1; }
 
-  local got=0 aname asize aurl
+  local got=0 aname="" asize="" aurl=""
   while IFS=$'\t' read -r aname asize aurl; do
     [ -n "$aname" ] || continue
     say "下载 $aname（期望 $(num_h "$asize")）"
