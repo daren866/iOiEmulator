@@ -60,7 +60,9 @@ echo "== 5) 校验导出符号"
 SYMS="$(nm -gU "$OUT/libltfw.a" 2>/dev/null || true)"
 [ -z "$SYMS" ] && SYMS="$(xcrun llvm-nm -gU "$OUT/libltfw.a" 2>/dev/null || true)"
 [ -z "$SYMS" ] && SYMS="$(nm "$OUT/libltfw.a" 2>/dev/null || true)"
-if ! echo "$SYMS" | grep -q "_ltfw_create"; then
+# 注意不能用 grep -q：找到即退出会触发 SIGPIPE，在 set -o pipefail 下把整条
+# 管道判为失败（实测：符号存在却被误判）。grep >/dev/null 读完输入，无此问题。
+if ! echo "$SYMS" | grep "_ltfw_create" > /dev/null; then
   echo "::error::libltfw.a 未导出 _ltfw_create（诊断信息如下）"
   echo "--- nm（报错样例）---"
   nm "$OUT/libltfw.a" 2>&1 | head -5 || true
