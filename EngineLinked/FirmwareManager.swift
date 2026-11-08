@@ -49,7 +49,7 @@ struct DeviceBundle: Identifiable, Hashable {
 ///   Documents/Devices/<entryID>/           firmwarekit create 产出的设备目录
 ///   Documents/Devices/<entryID>-rw/        guest NAND 写入 overlay（启动参数 nand-overlay=）
 @MainActor
-final class FirmwareManager: ObservableObject {
+final class FirmwareManager: NSObject, ObservableObject {
     static let shared = FirmwareManager()
 
     @Published private(set) var entries: [FirmwareEntry] = []
@@ -243,7 +243,7 @@ final class FirmwareManager: ObservableObject {
             bundles.append(DeviceBundle(
                 entryID: id,
                 dir: dir,
-                machine: entry.map { machine(forBoard: $0.board) },
+                machine: entry.flatMap { machine(forBoard: $0.board) },
                 hasIBoot: fileManager.fileExists(atPath: dir.appendingPathComponent("iBoot.bin").path),
                 hasNand: fileManager.fileExists(atPath: dir.appendingPathComponent("nand", isDirectory: true).path)
             ))

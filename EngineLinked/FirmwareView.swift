@@ -34,16 +34,16 @@ struct FirmwareView: View {
             manager.tickProgress()
         }
         .fileImporter(isPresented: Binding(get: { importingIPSWFor != nil }, set: { if !$0 { importingIPSWFor = nil } }),
-                      allowedContentTypes: [.zip, .data], allowMultiple: false) { result in
-            if case .success(let url) = result, let entry = importingIPSWFor {
+                      allowedContentTypes: [.zip, .data], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first, let entry = importingIPSWFor {
                 do { try manager.importIPSW(at: url, for: entry) }
                 catch { manager.lastError = "导入失败：\(error.localizedDescription)" }
             }
             importingIPSWFor = nil
         }
         .fileImporter(isPresented: Binding(get: { importingBootromBoard != nil }, set: { if !$0 { importingBootromBoard = nil } }),
-                      allowedContentTypes: [.data], allowMultiple: false) { result in
-            if case .success(let url) = result, let board = importingBootromBoard {
+                      allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first, let board = importingBootromBoard {
                 do { try manager.importBootrom(at: url, for: board) }
                 catch { manager.lastError = "导入失败：\(error.localizedDescription)" }
             }
