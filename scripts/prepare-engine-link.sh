@@ -63,6 +63,39 @@ gen_flags() {
   while IFS= read -r l; do say "  $l"; done < "$dir/engine_libflags.txt"
 }
 
+# 从 GitHub Releases 下载匹配 glob 模式的资产到「当前目录」。
+# 用 curl + Releases API，不依赖 gh CLI（macOS runner 默认未预装 gh）。
+# 返回 0 表示至少成功下载了一个匹配资产；否则返回 1。
+fetch_release_assets() {
+  local tag="$1"; shift
+  local repo="${GITHUB_REPOSITORY:-daren866/iOiEmulator}"
+  local api="https://api.github.com/repos/$repo/releases/tags/$tag"
+  local H=(-H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
+  [ -n "${GITHUB_TOKEN:-}" ] && H+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+  local json
+  json="$(curl -fsSL "${H[@]}" "$api" 2>/dev/null)" || return 1
+  local manifest; manifest="$(mktemp)"
+  printf '%s' "$json" | python3 -c "
+import sys, json, fnmatch
+d = json.load(sys.stdin)
+pats = set(sys.argv[1:])
+for a in d.get('assets', []):
+    if any(fnmatch.fnmatch(a['name'], p) for p in pats):
+        print(a['name'] + '\t' + a['browser_download_url'])
+" "$@" > "$manifest" 2>/dev/null || { rm -f "$manifest"; return 1; }
+  local got=0 aname aurl
+  while IFS=$'\t' read -r aname aurl; do
+    [ -n "$aname" ] || continue
+    say "   下载 $aname"
+    if curl -fL --retry 5 --retry-delay 3 --connect-timeout 20 --max-time 900 \
+         -o "$aname" "$aurl" 2>/dev/null; then
+      got=1
+    fi
+  done < "$manifest"
+  rm -f "$manifest"
+  return $got
+}
+
 # 引擎接好后，尽量把固件制备库 libltfw.a（firmwarekit wrapper）也带上。
 # 来源顺序：同 run artifact（下载到 ENGINE_ARTIFACT_DIR/firmware-kit）→
 # firmware-kit-latest Release → 本地已有。找不到不报错（制备功能随库缺失降级）。
@@ -78,12 +111,12 @@ link_firmware_kit() {
       break
     fi
   done
-  if [ -z "${found:-}" ] && command -v gh >/dev/null 2>&1 && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+  if [ -z "${found:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
     local TMP
     TMP="$(mktemp -d)"
-    if gh release download firmware-kit-latest --repo "$GITHUB_REPOSITORY" \
-         --pattern 'libltfw.a' --pattern 'ltfw.h' --dir "$TMP" --clobber >/dev/null 2>&1 \
-         && [ -f "$TMP/libltfw.a" ]; then
+    ( cd "$TMP" && fetch_release_assets firmware-kit-latest 'libltfw.a' 'ltfw.h' ) \
+      && [ -f "$TMP/libltfw.a" ]
+    if [ -f "$TMP/libltfw.a" ]; then
       cp "$TMP/libltfw.a" "$PREBUILT/" 2>/dev/null || true
       mkdir -p "$PREBUILT/include"
       cp "$TMP/ltfw.h" "$PREBUILT/include/" 2>/dev/null || true
@@ -145,21 +178,18 @@ if [ -d "$CANDIDATE" ] && link_engine_from "$CANDIDATE" "artifact"; then
   exit 0
 fi
 
-# 2) engine-latest Release
-if command -v gh >/dev/null 2>&1 && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+# 2) engine-latest Release（用 curl + Releases API，不依赖 gh CLI）
+if [ -n "${GITHUB_REPOSITORY:-}" ]; then
   TMP="$(mktemp -d)"
-  if gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-       --pattern 'qemu-engine*.tar.gz' --pattern 'libqemu-arm.a' \
-       --dir "$TMP" --clobber >/dev/null 2>&1; then
-    TAR="$(find "$TMP" -name 'qemu-engine*.tar.gz' -type f 2>/dev/null | head -n 1)"
-    if [ -n "$TAR" ]; then
-      EXT="$TMP/extracted"
-      mkdir -p "$EXT"
-      tar xzf "$TAR" -C "$EXT" 2>/dev/null || true
-      if link_engine_from "$EXT" "release"; then
-        rm -rf "$TMP"
-        exit 0
-      fi
+  if ( cd "$TMP" && fetch_release_assets "$RELEASE_TAG" 'qemu-engine*.tar.gz' ) \
+       && TAR="$(find "$TMP" -name 'qemu-engine*.tar.gz' -type f 2>/dev/null | head -n 1)" \
+       && [ -n "$TAR" ]; then
+    EXT="$TMP/extracted"
+    mkdir -p "$EXT"
+    tar xzf "$TAR" -C "$EXT" 2>/dev/null || true
+    if link_engine_from "$EXT" "release"; then
+      rm -rf "$TMP"
+      exit 0
     fi
   fi
   rm -rf "$TMP"
