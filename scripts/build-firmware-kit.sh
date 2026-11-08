@@ -54,7 +54,22 @@ echo "== 4) 归集产物 → $OUT"
 mkdir -p "$OUT" "$OUT/include"
 cp "$LIB" "$OUT/libltfw.a"
 cp "$KIT/ltfw.h" "$OUT/include/ltfw.h"
-nm "$OUT/libltfw.a" 2>/dev/null | grep -q "_ltfw_create" \
-  || { echo "::error::libltfw.a 未导出 _ltfw_create"; exit 1; }
+echo "== 5) 校验导出符号"
+# Apple nm 对 rustc 新版 LLVM 归档格式偶尔直接报错（stderr 此前被吞导致难排查），
+# 依次尝试 nm / xcrun llvm-nm，全部失败则打印诊断信息。
+SYMS="$(nm -gU "$OUT/libltfw.a" 2>/dev/null || true)"
+[ -z "$SYMS" ] && SYMS="$(xcrun llvm-nm -gU "$OUT/libltfw.a" 2>/dev/null || true)"
+[ -z "$SYMS" ] && SYMS="$(nm "$OUT/libltfw.a" 2>/dev/null || true)"
+if ! echo "$SYMS" | grep -q "_ltfw_create"; then
+  echo "::error::libltfw.a 未导出 _ltfw_create（诊断信息如下）"
+  echo "--- nm（报错样例）---"
+  nm "$OUT/libltfw.a" 2>&1 | head -5 || true
+  echo "--- xcrun llvm-nm ---"
+  xcrun llvm-nm "$OUT/libltfw.a" 2>&1 | grep -iE "ltfw|error|no such" | head -10 || true
+  echo "--- 归档成员（前 5）---"
+  ar t "$OUT/libltfw.a" 2>&1 | head -5 || true
+  exit 1
+fi
+echo "   OK: ltfw_create / ltfw_abi_version 已导出"
 
 echo "== OK: $OUT/libltfw.a ($(du -h "$OUT/libltfw.a" | cut -f1))"
