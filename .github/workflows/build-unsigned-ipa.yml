@@ -104,6 +104,9 @@ jobs:
         env:
           ENGINE_ARTIFACT_DIR: ${{ env.ENGINE_ARTIFACT_DIR }}
           ENGINE_RELEASE_TAG: engine-latest
+          # 显式转发 token，避免 Releases API 走未认证限流（60/h），
+          # 并让 prepare-engine-link.sh 的多镜像下载能拿到稳定源。
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/prepare-engine-link.sh
 
       - name: Install Tuist and ldid
@@ -117,7 +120,8 @@ jobs:
           OK=0
           for URL in "${BASE}/tuist.zip" "${MIRROR}/tuist.zip"; do
             echo "尝试下载：$URL"
-            if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
+            if curl -fL --retry-all-errors --retry 10 --retry-delay 3 \
+                 --retry-max-time 600 --connect-timeout 20 --max-time 900 \
                  -o /tmp/tuist.zip "$URL"; then
               OK=1
               break
