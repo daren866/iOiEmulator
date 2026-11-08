@@ -65,6 +65,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 历史提交经 force-push 改写，runner 增量 checkout 缓存可能把工作树文件
+      # 留在旧版（HEAD 已指向新 commit，但个别文件未重新物化）。强制把全部
+      # 跟踪文件重新对齐到目标 commit，避免「git log 是新版、运行的却是旧文件」。
+      - name: 强制刷新工作树到目标提交
+        run: |
+          git fetch --force origin "${{ github.sha }}"
+          git checkout --force "${{ github.sha }}" -- .
+
       - name: 显示 macOS arm64 工具链
         run: |
           sw_vers
