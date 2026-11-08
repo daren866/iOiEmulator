@@ -48,24 +48,43 @@ fetch() {
   #   2) curl 直连 github.com —— runner 本地网络通常最稳
   #   3) curl 走 gh-proxy 镜像 —— 仅本地直连不通时回退（镜像偶发 500）
   # FORCE_PROXY=1 时跳过前两种，直接走镜像（本地网络环境调试用）。
+  #
+  # 关键：GitHub 服务端偶发 5xx（500/503）。curl 默认 --retry 只对连接失败/
+  # 超时/429 重试，对已收到的 5xx 响应不重试。必须加 --retry-all-errors，才
+  # 能对临时 5xx 也重试；配合较长退避，可扛过服务端瞬时抖动。每个源再包一层
+  # 多次尝试循环作为兜底。
+  curl_retry() {
+    # $1 = url
+    curl -fL --retry 10 --retry-all-errors --retry-delay 5 --retry-max-time 600 \
+      --connect-timeout 30 --max-time 900 -o "$target" "$1"
+  }
+  try_times() {
+    # $1 = 描述；后续为要执行的命令（直接用 curl_retry 或 gh）
+    local desc="$1"; shift
+    local attempts=3 i
+    for i in 1 2 3; do
+      echo "   [$desc] 第 $i 次尝试"
+      if "$@"; then return 0; fi
+      [ "$i" -lt 3 ] && sleep 4
+    done
+    return 1
+  }
   download_via_gh() {
     [ -n "${FORCE_PROXY:-}" ] && return 1
     command -v gh >/dev/null 2>&1 || return 1
     echo "   尝试 gh release download（API 认证直连）"
-    gh release download v0.0.13 --repo blake-lucas/LightTouch \
-      --pattern "$name" --dir "$DEST" --clobber >/dev/null 2>&1 \
+    try_times "gh" gh release download v0.0.13 --repo blake-lucas/LightTouch \
+      --pattern "$name" --dir "$DEST" --clobber \
       && [ -f "$target" ]
   }
   download_via_curl_direct() {
     [ -n "${FORCE_PROXY:-}" ] && return 1
     echo "   尝试 curl 直连 github.com"
-    curl -fL --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 900 \
-      -o "$target" "${BASE}/${name}"
+    try_times "curl-直连" curl_retry "${BASE}/${name}"
   }
   download_via_proxy() {
     echo "   尝试镜像 $PROXY"
-    curl -fL --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 900 \
-      -o "$target" "${PROXY}/${BASE}/${name}"
+    try_times "curl-镜像" curl_retry "${PROXY}/${BASE}/${name}"
   }
 
   local ok=0
