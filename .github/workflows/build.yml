@@ -21,6 +21,14 @@ jobs:
       - name: Install host build tools
         run: brew install bison gettext glib gnu-sed pkg-config
 
+      # QEMU 的 configure 需要 Python 的 'six' 模块，macos  runner 默认没有 -> 提前装好
+      - name: Install Python deps (six) for QEMU configure
+        run: |
+          python3 -m ensurepip --upgrade 2>/dev/null || true
+          python3 -m pip install --upgrade pip setuptools
+          python3 -m pip install six
+          python3 -c "import six; print('six', six.__version__)"
+
       - name: Prepare UTM (clone + trim TARGET_LIST to arm)
         run: bash scripts/trim-utm.sh "$RUNNER_TEMP/UTM"
 
