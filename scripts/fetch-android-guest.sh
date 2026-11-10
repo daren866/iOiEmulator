@@ -3,11 +3,11 @@
 # fetch-android-guest.sh — 路线 2 的「首次启动下载」
 # ---------------------------------------------------------------------------
 # 下载并解包安卓 4.0（API 15, ICS）的【用户空间镜像】（system/ramdisk/userdata），
-# 供 UTM 上游 QEMU 的 -machine virt 启动使用。
+# 供 UTM 上游 QEMU 的 -machine vexpress-a15（默认）启动使用。
 #
 # 与路线 1 的区别：
-#   - 不再使用官方包里的 kernel-qemu（它是 goldfish 内核，virt 上跑不起来）。
-#   - 内核 + dtb 必须由 scripts/build-android-virt-kernel.sh 单独产出（为 virt/vexpress 编译），
+#   - 不再使用官方包里的 kernel-qemu（它是 goldfish 内核，vexpress/virt 上跑不起来）。
+#   - 内核必须由 scripts/build-android-virt-kernel.sh 单独产出（默认 vexpress-a15 编译），
 #     或放到 KERNEL_URL 指向的预编译产物。本脚本只负责用户空间部分 + 生成 manifest。
 #
 # 用法：bash scripts/fetch-android-guest.sh [OUT_DIR]
@@ -72,14 +72,14 @@ for f in system.img ramdisk.img userdata.img; do
 done
 [ -f "$SRC/build.prop" ] && cp -f "$SRC/build.prop" "$OUT_DIR/build.prop"
 
-# 可选：预编译内核 + dtb（若提供 KERNEL_URL）
+# 可选：预编译内核 + dtb（若提供 KERNEL_URL）—— 默认 vexpress-a15，QEMU 自带 dtb
 if [ -n "${KERNEL_URL:-}" ]; then
-  KZ="$CACHE_DIR/android40-virt-kernel.zip"
-  say "下载预编译 virt 内核 ($KERNEL_URL)"
+  KZ="$CACHE_DIR/android40-vexpress-kernel.zip"
+  say "下载预编译 vexpress-a15 内核 ($KERNEL_URL)"
   dl "" "$KZ" "$KERNEL_URL" || say "::warning::内核下载失败，请改用 build-android-virt-kernel.sh 本地编译"
   if [ -f "$KZ" ]; then
     unzip -q -o "$KZ" -d "$OUT_DIR" || true
-    say "已放入内核/dtb（zImage, virt.dtb 等）"
+    say "已放入内核（zImage；vexpress-a15 由 QEMU 自带 dtb）"
   fi
 fi
 rm -rf "$TMP"
@@ -89,10 +89,10 @@ cat > "$OUT_DIR/manifest.json" <<EOF
   "android_version": "4.0.3",
   "api_level": 15,
   "abi": "armeabi-v7a",
-  "machine": "virt (或 vexpress-a15)",
+  "machine": "vexpress-a15 (默认；备选 -machine virt 需 ARCH_VIRT 反向移植)",
   "userspace_images": ["system.img", "ramdisk.img", "userdata.img"],
-  "kernel": "由 scripts/build-android-virt-kernel.sh 产出 zImage + virt.dtb（不可用官方 kernel-qemu）",
-  "note": "路线2：用 UTM 上游 QEMU 的 -machine virt 启动；内核需为 virt/vexpress 单独编译。",
+  "kernel": "由 scripts/build-android-virt-kernel.sh 产出 zImage（vexpress-a15 由 QEMU 自带 dtb；不可用官方 kernel-qemu）",
+  "note": "路线2：用 UTM 上游 QEMU 的 -machine vexpress-a15 启动；内核需为 vexpress-a15 单独编译。",
   "source": { "system_image": "$SYSIMG_URL" }
 }
 EOF

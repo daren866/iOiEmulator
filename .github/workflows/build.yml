@@ -42,14 +42,14 @@ jobs:
           path: ${{ runner.temp }}/UTM/UTM SE.ipa
           if-no-files-found: error
 
-  # 可选：把安卓 4.0 镜像作为独立产物提供（App 首次启动也会再下载一次）
+  # 可选：把安卓 4.0 用户空间镜像作为独立产物提供（App 首次启动也会再下载一次）
   fetch-images:
     name: Fetch Android 4.0 image packages
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download + verify + extract
-        run: bash scripts/fetch-android-images.sh OUT_DIR="$RUNNER_TEMP/Android40"
+      - name: Download + verify + extract (route 2, vexpress-a15 userspace)
+        run: bash scripts/fetch-android-guest.sh "$RUNNER_TEMP/Android40"
       - uses: actions/upload-artifact@v4
         with:
           name: android40-images
