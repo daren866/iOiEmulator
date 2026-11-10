@@ -2,7 +2,7 @@
 #
 # trim-utm.sh  <DEST_DIR>
 # ---------------------------------------------------------------------------
-# 1) 经代理克隆 UTM（绕过 github 直连不稳），默认分支 master。
+# 1) 经代理克隆 UTM（绕过 github 直连不稳），默认分支 main（UTM 已将默认分支由 master 改为 main）。
 # 2) 把 QEMU 的 TARGET_LIST 裁剪为只保留：
 #       arm-softmmu      -> arm32 客户机（对应安卓 armeabi-v7a）
 #       aarch64-softmmu  -> arm64 客户机
@@ -13,7 +13,7 @@ set -euo pipefail
 
 UTM_REPO="${UTM_REPO:-https://github.com/utmapp/UTM.git}"
 UTM_PROXY="${UTM_PROXY:-https://v4.gh-proxy.org}"
-BRANCH="${UTM_BRANCH:-master}"
+BRANCH="${UTM_BRANCH:-main}"
 DEST="${1:-$(cd "$(dirname "$0")/.." && pwd)/UTM}"
 
 echo "== 克隆 UTM: $UTM_REPO @ $BRANCH -> $DEST =="
