@@ -1,0 +1,33 @@
+# 安卓 4.0 (API 15, ICS) 在「goldfish 版 QEMU」上的参考启动命令
+# ---------------------------------------------------------------------------
+# ⚠️ 重要：下面的命令只能在【带 goldfish/ranchu 机器的 QEMU】上跑（即 AOSP 的
+#    external/qemu，或 UTM 当前【不】包含的上游 QEMU 之外的 goldfish 移植）。
+#    UTM 用的是上游 QEMU（只有 virt/raspi），无法直接启动本镜像的 kernel-qemu。
+#    见仓库根 README 的「为什么不能直接用 UTM 启动」一节。
+#
+# 镜像由 scripts/fetch-android-images.sh 解包到同目录（kernel-qemu / system.img /
+# ramdisk.img / userdata.img）。下面的命令假设你已 cd 到该目录。
+
+qemu-system-arm \
+  -machine goldfish \
+  -cpu cortex-a8 \
+  -m 256 \
+  -kernel kernel-qemu \
+  -system system.img \
+  -ramdisk ramdisk.img \
+  -data userdata.img \
+  -append "console=ttyS0,115200n8 androidboot.console=ttyS0 androidboot.hardware=goldfish android.qemud=1" \
+  -serial mon:stdio \
+  -display none
+
+# 若要图形与多点触控，需要 goldfish 的 fb / events / pipe 等设备，典型（ranchu/goldfish）
+# 设备行（AOSP emulator 实际会加很多，这里仅作提示）：
+#   -device goldfish_fb
+#   -device goldfish_events
+#   -device goldfish_battery
+#   -chardev pipe,id=pipe0,path=qemu_pipe
+#   -device goldfish_pipe,chardev=pipe0
+#
+# 说明：system.img 以只读方式挂载；用户数据写在 userdata.img（首次启动会扩展）。
+# 若用上游 QEMU 的 -machine virt 替代 goldfish，kernel-qemu 会因找不到 goldfish
+# 外设（特定地址的 uart/timer/nand）而启动失败，请勿直接替换机器类型。
