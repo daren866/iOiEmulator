@@ -1,0 +1,48 @@
+# 安卓 4.0 (API 15, ICS) 在【上游 QEMU -machine virt】上的启动参考（路线 2）
+# ===========================================================================
+# 这是路线 2 的启动方式：用 UTM 的上游 QEMU（含 virt 机器）+ 一个【为 virt 编译】
+# 的 Android 内核 + device tree，而不是那颗 goldfish 的 kernel-qemu。
+# （kernel-qemu 是 goldfish 内核，在 virt 上会因找不到 goldfish 外设而失败。）
+#
+# 前提（见 scripts/build-android-virt-kernel.sh）：
+#   - zImage：为 ARM32 + QEMU virt 编译的 Android 内核（含 binder/ashmem 等 Android 补丁）
+#   - virt.dtb：对应 device tree
+#   - system.img / userdata.img：来自官方 AVD 包的安卓 4.0 用户空间（可复用）
+#
+# 重要现实（务必读）：
+#   Android 4.0 用 Linux 3.0 内核，而 QEMU 的 ARCH_VIRT 支持出现在 3.11 之后。
+#   所以直接用 3.0 + virt 可能起不来，需要二选一：
+#     (A) 把 ARCH_VIRT 反向移植到 3.0（改动大）；或
+#     (B) 改用 -machine vexpress-a15（3.0 的 vexpress_defconfig 原生支持）。
+#   下面给 virt 版本；若选 (B) 把 -machine virt 换成 vexpress-a15、去掉 -dtb 即可。
+#   另外安卓 4.0 的 ramdisk 里 init 是按 goldfish 设备写的，在 virt/vexpress 上
+#   需要改 fstab / init.rc 让 root 指向 virtio-blk（/dev/vda）或 mmcblk，这是
+#   真正 boot 起来前的最后一步适配，不在本仓库自动完成。
+
+qemu-system-arm \
+  -machine virt \
+  -cpu cortex-a15 \
+  -m 1024 \
+  -kernel zImage \
+  -dtb virt.dtb \
+  -drive file=system.img,if=none,format=raw,id=sys \
+  -device virtio-blk-device,drive=sys \
+  -drive file=userdata.img,if=none,format=raw,id=user \
+  -device virtio-blk-device,drive=user \
+  -append "console=ttyAMA0 root=/dev/vda rw rootwait init=/init androidboot.hardware=virt" \
+  -device virtio-net-device,netdev=net0 \
+  -netdev user,id=net0,hostfwd=tcp::5555-:5555 \
+  -device virtio-gpu-device \
+  -device virtio-keyboard-device \
+  -serial stdio
+
+# 若改用 vexpress-a15（避开 ARCH_VIRT 反向移植）：
+# qemu-system-arm \
+#   -machine vexpress-a15 \
+#   -cpu cortex-a15 \
+#   -m 1024 \
+#   -kernel zImage \
+#   -drive file=system.img,if=sd,format=raw \
+#   -append "console=ttyAMA0 root=/dev/mmcblk0 rw rootwait init=/init androidboot.hardware=vexpress" \
+#   -netdev user,id=net0 -device smc91c111,netdev=net0 \
+#   -serial stdio

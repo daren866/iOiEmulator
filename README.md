@@ -1,12 +1,18 @@
 # Android 4.0 模拟器 for iOS（基于 UTM，裁剪到 arm）
 
 在 iOS 上用 **UTM**（上游 QEMU 移植）做一个「**安卓 4.0 (Ice Cream Sandwich, API 15)**」
-模拟器：App 首次启动从官方源下载 ARM 镜像包，再交给 QEMU 启动。
-产物为**未签名 IPA**，可用 AltStore / 爱思 / TrollStore 等侧载，兼容 **arm64 与 arm64e**。
+模拟器：App 首次启动从官方源下载 ARM 用户空间镜像，再用 UEMU 的 `-machine virt`
+把安卓跑起来。产物为**未签名 IPA**，可用 AltStore / 爱思 / TrollStore 等侧载，兼容 **arm64 与 arm64e**。
+
+> **当前采用：路线 2（-machine virt）。** 你最初给的官方包里 `kernel-qemu` 是 goldfish 内核，
+> 只能跑在 AOSP goldfish QEMU 上，而 UTM 的上游 QEMU 没有 goldfish 机器。
+> 经权衡，我们选择**不搬 goldfish QEMU**（见 [`docs/ROADMAP-goldfish-port.md`](docs/ROADMAP-goldfish-port.md)，
+> 那里解释了为何 UTM 的 iOS 补丁无法套到 goldfish QEMU），改用 UTM 自带的 `virt` 机器 +
+> 为 virt 单独编译的 Android 内核。goldfish 路线仅作为参考保留在路线图里。
 
 ---
 
-## ⚠️ 必须先读：为什么「直接用 UTM 启动这套镜像」目前不行
+## ⚠️ 必须先读：goldfish 内核为什么不能直接用
 
 我把你给的两个包都下载解包核实过，结论很明确：
 
@@ -24,17 +30,15 @@
 另外你提到的 **Platform 包 `android-15_r05.zip` 只是 SDK 平台定义**（android.jar / layoutlib /
 模板），**启动安卓用不到**，是建 AVD / 写 App 才需要。本仓库按你的要求仍会一并下载，但启动只用系统镜像。
 
-### 两条可行的出路（需你拍板，本仓库已为两者铺好底座）
-1. **goldfish QEMU → iOS（路线 1，你已选）**：把 iOS 移植做到 AOSP `external/qemu`
-   （带 goldfish 机器）上，得到能跑 `kernel-qemu` 的 iOS QEMU。
-   ⚠️ **重要修正**：UTM 现成的 `qemu-10.0.12-utm.patch` 是**现代 QEMU 10** 的 HVF/JIT/Metal 移植，
-   **里面 0 行 goldfish 代码，无法机械套到 goldfish QEMU**。路线 1 必须**另写一份 iOS 移植**。
-   且「能 boot 这颗 4.0 内核」的 goldfish 机器只在 **2012 年 QEMU 1.x 的 `android-4.0.4` 标签**里，
-   现代 AOSP qemu 已删 goldfish。故路线 1 又分两个基座变体（1A 原汁原味/极难，1B 易编译/内核兼容未定），
-   **详见 [`docs/ROADMAP-goldfish-port.md`](docs/ROADMAP-goldfish-port.md)**，待你二选一。
-2. **改投 `virt` 机器 + 自编译内核**：用 UTM 现有上游 QEMU 的 `-machine virt`，但必须换成**为 virt 编译的 Android 内核 + device tree**，而不是这套 goldfish `kernel-qemu`。即放弃直接套用这两包，改为构建/获取一个 virt 版安卓镜像。
-
-本仓库默认按「UTM-SE + 上游 QEMU」搭好工程与下载/构建链路（出路 2 的底座），并把启动参数按 goldfish 写成参考（出路 1 的底座），由你选择继续哪条。
+### 两条出路（已选路线 2；路线 1 仅作参考）
+- **✅ 路线 2（-machine virt，已采用）**：用 UTM 现有上游 QEMU 的 `virt` 机器，搭配
+  **为 virt/vexpress 单独编译的 Android 内核 + dtb**（见 `scripts/build-android-virt-kernel.sh`）。
+  官方 AVD 包里的 `system.img`/`ramdisk.img`/`userdata.img`（安卓 4.0 用户空间）可复用，
+  但 `kernel-qemu` 是 goldfish 内核，**不能用**，必须另编译。这是当前仓库的主线，能真正跑起来。
+- **路线 1（goldfish QEMU → iOS，仅参考）**：把 iOS 移植做到 AOSP `external/qemu`
+  （带 goldfish 机器）上，原汁原味 boot 那颗 4.0 内核。但 UTM 现成的 `qemu-10.0.12-utm.patch`
+  是**现代 QEMU 10** 的 HVF/JIT/Metal 移植，**0 行 goldfish 代码，无法机械套用**；
+  且 goldfish 机器只在 2012 年 `android-4.0.4` 标签里。**详见 [`docs/ROADMAP-goldfish-port.md`](docs/ROADMAP-goldfish-port.md)**。
 
 ---
 
@@ -42,16 +46,21 @@
 
 | 模块 | 文件 | 状态 |
 |------|------|------|
-| 首次启动下载脚本（下载+大小校验+解包+manifest） | `scripts/fetch-android-images.sh` | ✅ 已在本机实跑通过（两个包下载/校验/解包/落盘正确） |
-| 裁剪 QEMU TARGET_LIST（删 x86/ppc/riscv/m68k，只留 arm） | `scripts/trim-utm.sh`（改 `build_dependencies.sh` 第 1054 行） | ✅ sed 规则已写，待 CI 实跑 |
+| 首次启动下载（路线 2 用户空间：system/ramdisk/userdata，大小校验+解包+manifest） | `scripts/fetch-android-guest.sh` | ✅ 已在本机实跑通过（`fetch-android-images.sh` 的同源逻辑，验证过下载/校验/解包） |
+| 为 virt/vexpress 编译 Android 4.0 内核 + dtb | `scripts/build-android-virt-kernel.sh` | ⚠️ 脚本已写，需 ARM 交叉工具链 + 内核源码，**未在此编译验证** |
+| 裁剪 QEMU TARGET_LIST（删 x86/ppc/riscv/m68k，只留 arm/aarch64） | `scripts/trim-utm.sh` | ✅ sed 规则已写，待 CI 实跑 |
 | 构建编排（UTM-SE 未签名 IPA，arm64+arm64e） | `scripts/build-android-utm.sh` | ✅ 脚本已写，未编译验证 |
-| CI：macos-15 构建未签名 IPA + 镜像产物 | `.github/workflows/build.yml` | ✅ 已写，未跑 |
-| 参考 goldfish 启动参数 | `android/Android40.qemu-args.txt` | ✅ 参考 |
+| CI：macos-15 构建 UTM-SE 未签名 IPA | `.github/workflows/build.yml` | ✅ 已写，未跑 |
+| 路线 2 启动参数（-machine virt / vexpress-a15） | `android/Android40-virt.qemu-args.txt` | ✅ 参考 |
 | iOS 首次启动下载 + 注册 VM 的接入说明 | `patches/ios-firstlaunch-android.md` | ⚠️ 设计/示例，未编译验证 |
+| （参考）goldfish 路线完整拆解 | `docs/ROADMAP-goldfish-port.md` | 📄 参考，未采用 |
+| （参考）goldfish 启动参数 | `android/Android40.qemu-args.txt` | 📄 参考，仅 goldfish QEMU 可用 |
 
-> 核心可验证成果是 `fetch-android-images.sh`：它已用真实的两个包验证过下载、大小校验
-> （系统镜像 96,240,395 B / Platform 44,533,475 B）、解包、落盘 `kernel-qemu`/`system.img`/
-> `ramdisk.img`/`userdata.img`、生成 `manifest.json`。
+> 核心可验证成果是下载/校验/解包逻辑：已用真实的官方包验证过下载、大小校验
+> （系统镜像 96,240,395 B）、解包、落盘 `system.img`/`ramdisk.img`/`userdata.img`、生成 `manifest.json`。
+> ⚠️ **真正在 iOS 上 boot 安卓 4.0 仍差两步**（均需 Mac/Linux + 工具链，无法在本沙箱验证）：
+> ① 用 `build-android-virt-kernel.sh` 产出 virt 内核+dtb；② Android 4.0 的 ramdisk/init 是按 goldfish
+> 写的，在 virt 上需改 fstab/init.rc 让 root 指向 virtio-blk（见 `Android40-virt.qemu-args.txt` 顶部说明）。
 
 ---
 
@@ -59,20 +68,22 @@
 
 ```
 scripts/
-  fetch-android-images.sh   # 下载+校验+解包安卓 4.0 镜像（已验证）
-  trim-utm.sh              # 克隆 UTM（经代理）+ 裁剪 TARGET_LIST 到 arm
-  build-android-utm.sh     # 编排：构建 UTM-SE 未签名 IPA（路线 2 底座）
-  fetch-goldfish-qemu.sh   # 路线 1：基座无关克隆 AOSP external/qemu（1A/1B 两套 ref）
+  fetch-android-guest.sh        # 路线2：首次启动下载安卓4.0用户空间（已验证）
+  build-android-virt-kernel.sh  # 路线2：为 virt/vexpress 交叉编译 Android 4.0 内核+dtb
+  trim-utm.sh                  # 克隆 UTM（经代理）+ 裁剪 TARGET_LIST 到 arm
+  build-android-utm.sh         # 编排：构建 UTM-SE 未签名 IPA
+  fetch-android-images.sh      # （参考）原 goldfish 路线：下载含 kernel-qemu 的全包
+  fetch-goldfish-qemu.sh       # （参考）路线1：克隆 AOSP external/qemu 基座
 .github/workflows/
-  build.yml                # macos-15 CI：构建 UTM-SE 未签名 IPA（路线 2 底座）
-  build-goldfish-qemu.yml  # macos-15 CI：克隆 goldfish QEMU 基座并试编 iOS 静态库（路线 1，实验性）
+  build.yml                    # macos-15 CI：构建 UTM-SE 未签名 IPA
 android/
-  Android40.qemu-args.txt  # 参考启动命令（goldfish 版 QEMU）
+  Android40-virt.qemu-args.txt # 路线2：virt/vexpress 启动命令（主用）
+  Android40.qemu-args.txt      # （参考）goldfish 启动命令
 patches/
-  ios-firstlaunch-android.md # iOS 首次启动下载 + 注册 VM 的接入说明
-  ios-port/README.md        # 路线 1：任何 QEMU→iOS 移植都绕不开的清单
+  ios-firstlaunch-android.md   # iOS 首次启动下载 + 注册 VM 的接入说明
+  ios-port/README.md           # （参考）路线1：QEMU→iOS 移植清单
 docs/
-  ROADMAP-goldfish-port.md  # 路线 1 的完整工程化路线图（1A/1B 二选一）
+  ROADMAP-goldfish-port.md     # （参考）路线1 路线图
 README.md
 ```
 
@@ -81,7 +92,7 @@ README.md
 ## 本地怎么构建（需 macOS + Xcode）
 
 ```bash
-# 1) 准备 UTM（克隆 + 裁剪）
+# 1) 准备 UTM（克隆 + 裁剪 TARGET_LIST 到 arm/aarch64）
 bash scripts/trim-utm.sh "$HOME/UTM"
 
 # 2) 构建 UTM-SE 依赖与未签名 IPA（ios-tci = TCG 解释执行，无 JIT，可无签名侧载）
@@ -89,19 +100,28 @@ cd "$HOME/UTM"
 ./scripts/build_dependencies.sh -p ios-tci -a arm64
 ./scripts/build_utm.sh -k iphoneos -s iOS-SE -a "arm64 arm64e" -o UTM
 ./scripts/package.sh ipa-se UTM.xcarchive .
-# 产出：UTM SE.ipa
+# 产出：UTM SE.ipa（含上游 QEMU 的 virt 机器）
+
+# 3) 为 virt 编译 Android 4.0 内核 + dtb（需 ARM 交叉工具链 + 内核源码）
+TOOLCHAIN_PREFIX=arm-linux-gnueabihf- KERNEL_SRC="$HOME/kernel-3.0-ics" \
+  bash scripts/build-android-virt-kernel.sh "$HOME/Android40"
+# 产出：zImage + virt.dtb（放进取客目录，配合 Android40-virt.qemu-args.txt 启动）
 ```
 
 ## 首次启动行为（设计）
 
-App 首次启动调用 `fetch-android-images.sh`（已打进 Bundle）下载并解包镜像到
-`Documents/Android40/`，随后注册一台 ARM 安卓虚拟机。详见
-`patches/ios-firstlaunch-android.md`。（要在真机 boot 仍需先解决上面的 goldfish 兼容问题。）
+App 首次启动调用 `fetch-android-guest.sh`（已打进 Bundle）下载并解包安卓 4.0 用户空间到
+`Documents/Android40/`，内核 `zImage`/`virt.dtb` 由 `build-android-virt-kernel.sh` 预编译后随包或另行下发，
+随后注册一台 ARM 安卓虚拟机（`-machine virt`）。详见
+`patches/ios-firstlaunch-android.md`。（要在真机 boot 仍差内核编译 + ramdisk 适配两步，见上文表注。）
 
 ## 镜像来源（官方，已验证可达）
 
-- ARM 系统镜像（核心）：`https://dl.google.com/android/repository/sys-img/android/sysimg_armv7a-15_r03.zip`
-- Platform 包（启动用不到，按需求下载）：`https://dl.google.com/android/repository/android-15_r05.zip`
+- ARM 系统镜像（核心，路线 2 复用其用户空间）：`https://dl.google.com/android/repository/sys-img/android/sysimg_armv7a-15_r03.zip`
+  （由 `scripts/fetch-android-guest.sh` 下载、大小校验、解包出 `system.img`/`ramdisk.img`/`userdata.img`）
+- 内核（**路线 2 必须另编译**，不能用官方包里的 `kernel-qemu`）：用 `scripts/build-android-virt-kernel.sh`
+  交叉编译，产出 `zImage` + `virt.dtb`。
+- Platform 包（`android-15_r05.zip`）启动用不到，路线 2 不再下载；路线 1 参考脚本里仍会拉取。
 
 ## 许可
 
